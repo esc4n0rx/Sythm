@@ -1,0 +1,44 @@
+// Parabéns para Você - Versão Rítmica
+// Tempo normal
+C4 0.5
+rest 0.25
+C4 0.25
+D4 1.5
+C4 1
+F4 1.25
+E4 1.75
+
+rest 0.5
+
+C4 0.5
+rest 0.25
+C4 0.25
+D4 1.5
+C4 1
+G4 1.25
+F4 1.75
+
+rest 0.5
+
+// Parte mais dramática (mais alta)
+C4 0.5
+rest 0.25
+C4 0.25
+C5 1.5
+A4 1
+F4 1
+E4 1
+D4 2
+
+rest 0.5
+
+// Final
+Bb4 0.5
+rest 0.25
+Bb4 0.25
+A4 1.5
+F4 1
+G4 1.25
+F4 2
+
+rest 1

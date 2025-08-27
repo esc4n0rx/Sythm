@@ -14,6 +14,8 @@ export function useAudioContext() {
     bpm: 120,
   })
 
+  const [currentExecutingLine, setCurrentExecutingLine] = useState<number>(-1)
+
   const [engine] = useState(() => new SythmAudioEngine({ baseBeatsPerMinute: 120 }))
   const [interpreter] = useState(() => new SythmInterpreter(engine, {
     onNotePlay: (note, duration) => {
@@ -27,10 +29,16 @@ export function useAudioContext() {
     },
     onError: (error, node) => {
       console.error('Interpreter error:', error, node)
+      setCurrentExecutingLine(-1) // Limpa indicador em caso de erro
     },
     onComplete: () => {
       setAudioContext(prev => ({ ...prev, isPlaying: false }))
+      setCurrentExecutingLine(-1)
       console.log('Composition completed')
+    },
+    onLineExecute: (line) => {
+      setCurrentExecutingLine(line)
+      console.log(`Executing line: ${line}`) // Debug
     }
   }))
 
@@ -54,6 +62,7 @@ export function useAudioContext() {
   const executeCode = useCallback(async (code: string) => {
     try {
       setAudioContext(prev => ({ ...prev, isPlaying: true }))
+      setCurrentExecutingLine(-1)
 
       // Fase 1: Lexical Analysis (Tokenização)
       const lexer = new SythmLexer(code)
@@ -70,10 +79,10 @@ export function useAudioContext() {
 
     } catch (error) {
       setAudioContext(prev => ({ ...prev, isPlaying: false }))
+      setCurrentExecutingLine(-1)
       
       if (error instanceof SythmParseError) {
         console.error(`Parse Error: ${error.message}`)
-        // Aqui você pode mostrar o erro na UI se quiser
         alert(`Erro de sintaxe: ${error.message}`)
       } else {
         console.error('Execution error:', error)
@@ -89,6 +98,7 @@ export function useAudioContext() {
     interpreter.stop()
     engine.stop()
     setAudioContext(prev => ({ ...prev, isPlaying: false }))
+    setCurrentExecutingLine(-1)
   }, [interpreter, engine])
 
   /**
@@ -101,6 +111,7 @@ export function useAudioContext() {
 
   return {
     audioContext,
+    currentExecutingLine,
     executeCode,
     stopExecution,
     updateBPM,

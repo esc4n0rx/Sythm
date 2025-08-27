@@ -2,13 +2,14 @@
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Play, Square, HelpCircle } from 'lucide-react'
+import { Play, Square, HelpCircle, FolderOpen } from 'lucide-react'
 import { useState } from 'react'
 
 interface HeaderProps {
   isPlaying: boolean
   bpm: number
   onNew: () => void
+  onOpen: () => void
   onSave: () => void
   onExecute: () => void
   onStop: () => void
@@ -20,6 +21,7 @@ export function Header({
   isPlaying,
   bpm,
   onNew,
+  onOpen,
   onSave,
   onExecute,
   onStop,
@@ -45,6 +47,10 @@ export function Header({
         <nav className="flex items-center gap-4">
           <Button variant="ghost" size="sm" onClick={onNew}>
             Novo
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onOpen} className="flex items-center gap-2">
+            <FolderOpen className="w-4 h-4" />
+            Abrir
           </Button>
           <Button variant="ghost" size="sm" onClick={onSave}>
             Salvar
