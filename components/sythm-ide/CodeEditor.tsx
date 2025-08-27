@@ -7,10 +7,10 @@ import { tokenizeCode, getColorForType } from '@/lib/syntax-highlighter'
 interface CodeEditorProps {
   code: string
   onChange: (code: string) => void
-  currentExecutingLine?: number
+  // currentExecutingLine?: number  // COMENTAR ESTA LINHA
 }
 
-export function CodeEditor({ code, onChange, currentExecutingLine = -1 }: CodeEditorProps) {
+export function CodeEditor({ code, onChange /* currentExecutingLine = -1 */ }: CodeEditorProps) {  // COMENTAR O PARÂMETRO
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const highlightRef = useRef<HTMLDivElement>(null)
   const lineNumbersRef = useRef<HTMLDivElement>(null)
@@ -56,22 +56,22 @@ export function CodeEditor({ code, onChange, currentExecutingLine = -1 }: CodeEd
 
   const renderHighlightedCode = () => {
     return lines.map((line, lineIndex) => {
-      const actualLineNumber = lineIndex + 1
-      const isExecuting = currentExecutingLine === actualLineNumber
+      // const actualLineNumber = lineIndex + 1  // COMENTAR ESTA LINHA
+      // const isExecuting = currentExecutingLine === actualLineNumber  // COMENTAR ESTA LINHA
       
       return (
         <div 
           key={lineIndex} 
-          className={`min-h-[1.5rem] leading-6 relative ${
-            isExecuting ? 'bg-primary/20 rounded-sm' : ''
-          }`}
+          className={`min-h-[1.5rem] leading-6 relative`}
+          // className={`min-h-[1.5rem] leading-6 relative ${isExecuting ? 'bg-primary/20 rounded-sm' : ''}`}  // COMENTAR E USAR LINHA DE CIMA
         >
-          {/* Indicador de execução */}
+          {/* COMENTAR TODO ESTE BLOCO
           {isExecuting && (
             <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary rounded-r-sm" />
           )}
+          */}
           
-          <div className={isExecuting ? 'pl-2' : ''}>
+          <div /* className={isExecuting ? 'pl-2' : ''} */>  {/* COMENTAR O CLASSNAME */}
             {line === '' ? (
               // Linha vazia precisa ter altura para manter alinhamento
               <span className="opacity-0">.</span>
@@ -91,21 +91,19 @@ export function CodeEditor({ code, onChange, currentExecutingLine = -1 }: CodeEd
   const renderLineNumbers = () => {
     return Array.from({ length: lineCount }, (_, i) => {
       const lineNumber = i + 1
-      const isExecuting = currentExecutingLine === lineNumber
+      // const isExecuting = currentExecutingLine === lineNumber  // COMENTAR ESTA LINHA
       
       return (
         <div
           key={lineNumber}
-          className={`h-6 leading-6 text-right pr-2 select-none text-sm font-mono relative ${
-            isExecuting 
-              ? 'text-primary font-bold bg-primary/10' 
-              : 'text-muted-foreground/60'
-          }`}
+          className={`h-6 leading-6 text-right pr-2 select-none text-sm font-mono text-muted-foreground/60`}
+          // className={`h-6 leading-6 text-right pr-2 select-none text-sm font-mono relative ${isExecuting ? 'text-primary font-bold bg-primary/10' : 'text-muted-foreground/60'}`}  // COMENTAR E USAR LINHA DE CIMA
         >
-          {/* Indicador visual na numeração */}
+          {/* COMENTAR TODO ESTE BLOCO
           {isExecuting && (
             <div className="absolute right-0 top-0 bottom-0 w-1 bg-primary" />
           )}
+          */}
           {lineNumber}
         </div>
       )

@@ -14,7 +14,7 @@ export function useAudioContext() {
     bpm: 120,
   })
 
-  const [currentExecutingLine, setCurrentExecutingLine] = useState<number>(-1)
+  // const [currentExecutingLine, setCurrentExecutingLine] = useState<number>(-1)  // COMENTAR ESTA LINHA
 
   const [engine] = useState(() => new SythmAudioEngine({ baseBeatsPerMinute: 120 }))
   const [interpreter] = useState(() => new SythmInterpreter(engine, {
@@ -29,17 +29,20 @@ export function useAudioContext() {
     },
     onError: (error, node) => {
       console.error('Interpreter error:', error, node)
-      setCurrentExecutingLine(-1) // Limpa indicador em caso de erro
+      // setCurrentExecutingLine(-1)  // COMENTAR ESTA LINHA
     },
     onComplete: () => {
       setAudioContext(prev => ({ ...prev, isPlaying: false }))
-      setCurrentExecutingLine(-1)
+      // setCurrentExecutingLine(-1)  // COMENTAR ESTA LINHA
       console.log('Composition completed')
     },
+    // COMENTAR ESTE BLOCO INTEIRO
+    /*
     onLineExecute: (line) => {
       setCurrentExecutingLine(line)
-      console.log(`Executing line: ${line}`) // Debug
+      console.log(`Executing line: ${line}`)
     }
+    */
   }))
 
   useEffect(() => {
@@ -62,7 +65,7 @@ export function useAudioContext() {
   const executeCode = useCallback(async (code: string) => {
     try {
       setAudioContext(prev => ({ ...prev, isPlaying: true }))
-      setCurrentExecutingLine(-1)
+      // setCurrentExecutingLine(-1)  // COMENTAR ESTA LINHA
 
       // Fase 1: Lexical Analysis (Tokenização)
       const lexer = new SythmLexer(code)
@@ -79,7 +82,7 @@ export function useAudioContext() {
 
     } catch (error) {
       setAudioContext(prev => ({ ...prev, isPlaying: false }))
-      setCurrentExecutingLine(-1)
+      // setCurrentExecutingLine(-1)  // COMENTAR ESTA LINHA
       
       if (error instanceof SythmParseError) {
         console.error(`Parse Error: ${error.message}`)
@@ -98,7 +101,7 @@ export function useAudioContext() {
     interpreter.stop()
     engine.stop()
     setAudioContext(prev => ({ ...prev, isPlaying: false }))
-    setCurrentExecutingLine(-1)
+    // setCurrentExecutingLine(-1)  // COMENTAR ESTA LINHA
   }, [interpreter, engine])
 
   /**
@@ -111,7 +114,7 @@ export function useAudioContext() {
 
   return {
     audioContext,
-    currentExecutingLine,
+    // currentExecutingLine,  // COMENTAR ESTA LINHA
     executeCode,
     stopExecution,
     updateBPM,

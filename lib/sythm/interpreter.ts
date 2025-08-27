@@ -19,7 +19,7 @@ export interface InterpreterOptions {
   onSpeedChange?: (modifier: number) => void;
   onError?: (error: Error, node: ASTNode) => void;
   onComplete?: () => void;
-  onLineExecute?: (line: number) => void;
+  // onLineExecute?: (line: number) => void;  // COMENTAR ESTA LINHA
 }
 
 export class SythmInterpreter {
@@ -28,7 +28,7 @@ export class SythmInterpreter {
   private currentTime: number = 0;
   private isRunning: boolean = false;
   private totalDuration: number = 0;
-  private currentLine: number = -1;
+  // private currentLine: number = -1;  // COMENTAR ESTA LINHA
 
   constructor(engine: SythmAudioEngine, options: InterpreterOptions = {}) {
     this.engine = engine;
@@ -46,7 +46,7 @@ export class SythmInterpreter {
     this.isRunning = true;
     this.currentTime = 0;
     this.totalDuration = 0;
-    this.currentLine = -1;
+    // this.currentLine = -1;  // COMENTAR ESTA LINHA
     
     // Reseta velocidade para normal no início
     this.engine.setNormalSpeed();
@@ -59,18 +59,21 @@ export class SythmInterpreter {
           break; // Parou durante execução
         }
         
+        // COMENTAR ESTE BLOCO INTEIRO
+        /*
         // Reporta linha atual sendo executada
         if (node.line !== undefined) {
           this.currentLine = node.line;
           this.options.onLineExecute?.(node.line);
         }
+        */
         
         await this.executeNode(node);
       }
       
-      // Limpa o indicador de linha e completa
-      this.currentLine = -1;
-      this.options.onLineExecute?.(-1);
+      // COMENTAR ESTAS LINHAS
+      // this.currentLine = -1;
+      // this.options.onLineExecute?.(-1);
       
       // Aguarda um pouco mais para garantir que todas as notas terminaram
       const finalWaitTime = Math.max(this.totalDuration * 1000, 1000);
@@ -83,8 +86,8 @@ export class SythmInterpreter {
       
     } catch (error) {
       this.isRunning = false;
-      this.currentLine = -1;
-      this.options.onLineExecute?.(-1);
+      // this.currentLine = -1;  // COMENTAR ESTA LINHA
+      // this.options.onLineExecute?.(-1);  // COMENTAR ESTA LINHA
       throw error;
     }
   }
@@ -97,8 +100,8 @@ export class SythmInterpreter {
     this.engine.stop();
     this.currentTime = 0;
     this.totalDuration = 0;
-    this.currentLine = -1;
-    this.options.onLineExecute?.(-1);
+    // this.currentLine = -1;  // COMENTAR ESTA LINHA
+    // this.options.onLineExecute?.(-1);  // COMENTAR ESTA LINHA
   }
 
   /**
@@ -140,7 +143,7 @@ export class SythmInterpreter {
   }
 
   /**
-   * Executa uma nota musical - AGORA ESPERA A DURAÇÃO REAL
+   * Executa uma nota musical
    */
   private async executeNote(node: NoteNode): Promise<void> {
     const duration = node.duration ?? 1; // duração padrão de 1 beat
@@ -161,7 +164,7 @@ export class SythmInterpreter {
   }
 
   /**
-   * Executa uma pausa - AGORA ESPERA A DURAÇÃO REAL
+   * Executa uma pausa
    */
   private async executeRest(node: RestNode): Promise<void> {
     const duration = node.duration ?? 1; // duração padrão de 1 beat
@@ -180,7 +183,7 @@ export class SythmInterpreter {
   }
 
   /**
-   * Executa comando slow - INSTANTÂNEO
+   * Executa comando slow
    */
   private async executeSlow(node: SlowNode): Promise<void> {
     this.engine.setSlow();
@@ -190,7 +193,7 @@ export class SythmInterpreter {
   }
 
   /**
-   * Executa comando fast - INSTANTÂNEO
+   * Executa comando fast
    */
   private async executeFast(node: FastNode): Promise<void> {
     this.engine.setFast();
@@ -206,7 +209,7 @@ export class SythmInterpreter {
     return {
       isRunning: this.isRunning,
       currentTime: this.currentTime,
-      currentLine: this.currentLine,
+      // currentLine: this.currentLine,  // COMENTAR ESTA LINHA
       totalDuration: this.totalDuration,
       engineState: this.engine.getState()
     };

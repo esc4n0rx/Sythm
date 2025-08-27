@@ -20,7 +20,7 @@ export default function SythmIDE() {
   const [pendingAction, setPendingAction] = useState<'new' | 'open' | null>(null)
   const [pendingFileData, setPendingFileData] = useState<{fileName: string, content: string} | null>(null)
 
-  const { audioContext, currentExecutingLine, executeCode, stopExecution, updateBPM, getState } = useAudioContext()
+  const { audioContext,executeCode, stopExecution, updateBPM, getState } = useAudioContext()
 
   const hasUnsavedChanges = (currentCode: string) => {
     return currentCode.trim() && currentCode !== DEFAULT_CODE && currentCode !== NEW_COMPOSITION_CODE
@@ -123,7 +123,6 @@ export default function SythmIDE() {
         <CodeEditor 
           code={code} 
           onChange={setCode} 
-          currentExecutingLine={currentExecutingLine}
         />
         <ComponentsSidebar onAddComponent={handleAddComponent} />
       </div>
