@@ -1,6 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { SythmLexer } from '@/lib/sythm/lexer'
+import { SythmParser, SythmParseError } from '@/lib/sythm/parser'
+import { SythmAudioEngine } from '@/lib/sythm/audio-engine'
+import { SythmInterpreter } from '@/lib/sythm/interpreter'
 import type { AudioContextType } from '@/types/sythm'
 
 export function useAudioContext() {
@@ -10,67 +14,96 @@ export function useAudioContext() {
     bpm: 120,
   })
 
+  const [engine] = useState(() => new SythmAudioEngine({ baseBeatsPerMinute: 120 }))
+  const [interpreter] = useState(() => new SythmInterpreter(engine, {
+    onNotePlay: (note, duration) => {
+      console.log(`Playing note: ${note} for ${duration} beats`)
+    },
+    onRest: (duration) => {
+      console.log(`Rest for ${duration} beats`)
+    },
+    onSpeedChange: (modifier) => {
+      console.log(`Speed changed: ${modifier}x`)
+    },
+    onError: (error, node) => {
+      console.error('Interpreter error:', error, node)
+    },
+    onComplete: () => {
+      setAudioContext(prev => ({ ...prev, isPlaying: false }))
+      console.log('Composition completed')
+    }
+  }))
+
   useEffect(() => {
+    // Inicializa o contexto quando o componente monta
     if (typeof window !== 'undefined') {
       const context = new (window.AudioContext || (window as any).webkitAudioContext)()
-      setAudioContext((prev) => ({ ...prev, context }))
+      setAudioContext(prev => ({ ...prev, context }))
+    }
+
+    // Cleanup
+    return () => {
+      stopExecution()
+      engine.dispose()
     }
   }, [])
 
-  const playNote = (frequency: number, duration = 0.5) => {
-    if (!audioContext.context) return
+  /**
+   * Executa código Sythm
+   */
+  const executeCode = useCallback(async (code: string) => {
+    try {
+      setAudioContext(prev => ({ ...prev, isPlaying: true }))
 
-    const oscillator = audioContext.context.createOscillator()
-    const gainNode = audioContext.context.createGain()
+      // Fase 1: Lexical Analysis (Tokenização)
+      const lexer = new SythmLexer(code)
+      const tokens = lexer.tokenize()
+      console.log('Tokens:', tokens)
 
-    oscillator.connect(gainNode)
-    gainNode.connect(audioContext.context.destination)
+      // Fase 2: Syntax Analysis (Parsing)
+      const parser = new SythmParser(tokens)
+      const ast = parser.parse()
+      console.log('AST:', ast)
 
-    oscillator.frequency.setValueAtTime(frequency, audioContext.context.currentTime)
-    oscillator.type = 'sine'
+      // Fase 3: Execution (Interpretação)
+      await interpreter.execute(ast)
 
-    gainNode.gain.setValueAtTime(0.3, audioContext.context.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.context.currentTime + duration)
+    } catch (error) {
+      setAudioContext(prev => ({ ...prev, isPlaying: false }))
+      
+      if (error instanceof SythmParseError) {
+        console.error(`Parse Error: ${error.message}`)
+        // Aqui você pode mostrar o erro na UI se quiser
+        alert(`Erro de sintaxe: ${error.message}`)
+      } else {
+        console.error('Execution error:', error)
+        alert(`Erro de execução: ${(error as Error).message}`)
+      }
+    }
+  }, [interpreter])
 
-    oscillator.start(audioContext.context.currentTime)
-    oscillator.stop(audioContext.context.currentTime + duration)
-  }
+  /**
+   * Para a execução
+   */
+  const stopExecution = useCallback(() => {
+    interpreter.stop()
+    engine.stop()
+    setAudioContext(prev => ({ ...prev, isPlaying: false }))
+  }, [interpreter, engine])
 
-  const executeCode = (code: string) => {
-    if (!audioContext.context) return
-
-    setAudioContext((prev) => ({ ...prev, isPlaying: true }))
-
-    const lines = code.split('\n').filter((line) => line.trim() && !line.trim().startsWith('//'))
-
-    lines.forEach((line, index) => {
-      setTimeout(() => {
-        if (line.includes('note("C4"') || line.includes('note("A4"')) {
-          playNote(440) // A4
-        } else if (line.includes('bass(')) {
-          playNote(130) // C3
-        } else if (line.includes('synth(')) {
-          playNote(523) // C5
-        }
-      }, index * 500)
-    })
-
-    setTimeout(
-      () => {
-        setAudioContext((prev) => ({ ...prev, isPlaying: false }))
-      },
-      lines.length * 500 + 1000,
-    )
-  }
-
-  const stopExecution = () => {
-    setAudioContext((prev) => ({ ...prev, isPlaying: false }))
-  }
+  /**
+   * Atualiza BPM
+   */
+  const updateBPM = useCallback((newBpm: number) => {
+    engine.updateConfig({ baseBeatsPerMinute: newBpm })
+    setAudioContext(prev => ({ ...prev, bpm: newBpm }))
+  }, [engine])
 
   return {
     audioContext,
-    playNote,
     executeCode,
     stopExecution,
+    updateBPM,
+    getState: () => interpreter.getState()
   }
 }

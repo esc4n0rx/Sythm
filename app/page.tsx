@@ -16,7 +16,7 @@ export default function SythmIDE() {
   const [showHelpDialog, setShowHelpDialog] = useState(false)
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false)
 
-  const { audioContext, executeCode, stopExecution } = useAudioContext()
+  const { audioContext, executeCode, stopExecution, updateBPM, getState } = useAudioContext()
 
   const handleNew = () => {
     if (code.trim() && code !== DEFAULT_CODE) {
@@ -48,6 +48,14 @@ export default function SythmIDE() {
     setCode((prevCode) => prevCode + component)
   }
 
+  const handleExecute = () => {
+    executeCode(code)
+  }
+
+  const handleBPMChange = (newBpm: number) => {
+    updateBPM(newBpm)
+  }
+
   return (
     <div className="h-screen flex flex-col bg-background text-foreground font-mono">
       <Header
@@ -55,9 +63,10 @@ export default function SythmIDE() {
         bpm={audioContext.bpm}
         onNew={handleNew}
         onSave={() => setShowSaveDialog(true)}
-        onExecute={() => executeCode(code)}
+        onExecute={handleExecute}
         onStop={stopExecution}
         onHelp={() => setShowHelpDialog(true)}
+        onBPMChange={handleBPMChange}
       />
 
       <div className="flex-1 flex">

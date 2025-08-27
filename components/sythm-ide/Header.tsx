@@ -1,7 +1,9 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Play, Square, HelpCircle } from 'lucide-react'
+import { useState } from 'react'
 
 interface HeaderProps {
   isPlaying: boolean
@@ -11,6 +13,7 @@ interface HeaderProps {
   onExecute: () => void
   onStop: () => void
   onHelp: () => void
+  onBPMChange?: (bpm: number) => void
 }
 
 export function Header({
@@ -21,7 +24,20 @@ export function Header({
   onExecute,
   onStop,
   onHelp,
+  onBPMChange,
 }: HeaderProps) {
+  const [bpmInput, setBpmInput] = useState(bpm.toString())
+
+  const handleBPMSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const newBpm = parseInt(bpmInput)
+    if (newBpm >= 60 && newBpm <= 200 && onBPMChange) {
+      onBPMChange(newBpm)
+    } else {
+      setBpmInput(bpm.toString()) // Reverte se inválido
+    }
+  }
+
   return (
     <header className="bg-sidebar border-b border-border px-4 py-2 flex items-center justify-between">
       <div className="flex items-center gap-6">
@@ -48,7 +64,20 @@ export function Header({
           </Button>
         </nav>
       </div>
-      <div className="text-sm text-muted-foreground">BPM: {bpm}</div>
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">BPM:</span>
+        <form onSubmit={handleBPMSubmit}>
+          <Input
+            type="number"
+            value={bpmInput}
+            onChange={(e) => setBpmInput(e.target.value)}
+            onBlur={handleBPMSubmit}
+            className="w-20 h-8 text-center"
+            min="60"
+            max="200"
+          />
+        </form>
+      </div>
     </header>
   )
 }
