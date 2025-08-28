@@ -135,6 +135,106 @@ export class SythmAudioEngine {
   }
 
   /**
+   * Toca múltiplas notas simultaneamente (acorde)
+   */
+  playChord(notes: string[], duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
+    if (!this.audioContext) {
+      throw new Error('Audio context not initialized');
+    }
+
+    try {
+      const actualDuration = this.calculateActualDuration(duration);
+      const actualStartTime = this.audioContext.currentTime + startTime;
+
+      // Cria um nó de ganho mestre para o acorde
+      const masterGain = this.audioContext.createGain();
+      masterGain.connect(this.audioContext.destination);
+
+      // Volume ajustado para evitar distorção com múltiplas notas
+      const chordVolume = this.config.masterVolume / Math.sqrt(notes.length);
+
+      // Cria um oscilador para cada nota do acorde
+      notes.forEach(note => {
+        try {
+          const frequency = getNoteFrequency(note);
+
+          // Cria oscilador e gain para esta nota
+          const oscillator = this.audioContext!.createOscillator();
+          const gainNode = this.audioContext!.createGain();
+
+          // Conecta os nós
+          oscillator.connect(gainNode);
+          gainNode.connect(masterGain);
+
+          // Configura o oscilador
+          oscillator.frequency.setValueAtTime(frequency, actualStartTime);
+          oscillator.type = this.config.waveType;
+
+          // Configura envelope ADSR
+          const attackTime = 0.01;
+          const decayTime = 0.1;
+          const sustainLevel = 0.7;
+          const releaseTime = 0.1;
+
+          // Attack
+          gainNode.gain.setValueAtTime(0, actualStartTime);
+          gainNode.gain.linearRampToValueAtTime(
+            chordVolume, 
+            actualStartTime + attackTime
+          );
+
+          // Decay
+          gainNode.gain.linearRampToValueAtTime(
+            chordVolume * sustainLevel, 
+            actualStartTime + attackTime + decayTime
+          );
+
+          // Sustain
+          const releaseStartTime = actualStartTime + actualDuration - releaseTime;
+          gainNode.gain.setValueAtTime(
+            chordVolume * sustainLevel, 
+            releaseStartTime
+          );
+
+          // Release
+          gainNode.gain.linearRampToValueAtTime(
+            0, 
+            releaseStartTime + releaseTime
+          );
+
+          // Agenda início e fim
+          oscillator.start(actualStartTime);
+          oscillator.stop(actualStartTime + actualDuration);
+
+          // Registra nós para controle
+          this.scheduledNodes.add(oscillator);
+          this.scheduledNodes.add(gainNode);
+
+          // Remove nós do conjunto após execução
+          oscillator.onended = () => {
+            this.scheduledNodes.delete(oscillator);
+            this.scheduledNodes.delete(gainNode);
+          };
+
+        } catch (error) {
+          console.error(`Error playing note ${note} in chord:`, error);
+        }
+      });
+
+      // Registra o nó master gain
+      this.scheduledNodes.add(masterGain);
+
+      // Remove o master gain após a execução
+      setTimeout(() => {
+        this.scheduledNodes.delete(masterGain);
+      }, (actualDuration + 0.2) * 1000);
+
+    } catch (error) {
+      console.error(`Error playing chord:`, error);
+    }
+  }
+
+  /**
    * Cria uma pausa
    */
   playRest(duration: number = this.config.baseNoteDuration): void {

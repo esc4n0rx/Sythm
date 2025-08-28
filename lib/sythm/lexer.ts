@@ -15,6 +15,7 @@ export interface Token {
     REST = 'REST',      // rest
     SLOW = 'SLOW',      // slow
     FAST = 'FAST',      // fast
+    LOOP = 'LOOP',      // loop
     
     // Literais
     NUMBER = 'NUMBER',   // 1, 2.5, 0.25, etc.
@@ -22,6 +23,11 @@ export interface Token {
     // Símbolos
     LPAREN = 'LPAREN',   // (
     RPAREN = 'RPAREN',   // )
+    LBRACKET = 'LBRACKET', // [
+    RBRACKET = 'RBRACKET', // ]
+    LBRACE = 'LBRACE',   // {
+    RBRACE = 'RBRACE',   // }
+    ASTERISK = 'ASTERISK', // *
     
     // Especiais
     NEWLINE = 'NEWLINE',
@@ -84,6 +90,16 @@ export interface Token {
           return this.makeToken(TokenType.LPAREN, char, startLine, startColumn);
         case ')':
           return this.makeToken(TokenType.RPAREN, char, startLine, startColumn);
+        case '[':
+          return this.makeToken(TokenType.LBRACKET, char, startLine, startColumn);
+        case ']':
+          return this.makeToken(TokenType.RBRACKET, char, startLine, startColumn);
+        case '{':
+          return this.makeToken(TokenType.LBRACE, char, startLine, startColumn);
+        case '}':
+          return this.makeToken(TokenType.RBRACE, char, startLine, startColumn);
+        case '*':
+          return this.makeToken(TokenType.ASTERISK, char, startLine, startColumn);
         case '\n':
           this.line++;
           this.column = 1;
@@ -188,6 +204,7 @@ export interface Token {
         case 'rest': return TokenType.REST;
         case 'slow': return TokenType.SLOW;
         case 'fast': return TokenType.FAST;
+        case 'loop': return TokenType.LOOP;
         default:
           // Verifica se é uma nota musical (ex: C4, F#5, Bb3)
           if (/^[A-G][#b]?\d+$/.test(value)) {

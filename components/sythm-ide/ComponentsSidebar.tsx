@@ -1,7 +1,7 @@
 'use client'
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Music, Clock, Volume2, Pause } from 'lucide-react'
+import { Music, Clock, Volume2, Pause, Repeat, Layers } from 'lucide-react'
 import type { Component } from '@/types/sythm'
 
 const COMPONENTS: Component[] = [
@@ -18,10 +18,22 @@ const COMPONENTS: Component[] = [
     subcomponents: ['C#4', 'D#4', 'F#4', 'G#4', 'A#4', 'Bb4', 'Db4'],
   },
   {
+    title: 'Acordes',
+    description: 'Múltiplas notas simultâneas',
+    icon: Layers,
+    subcomponents: ['[C4 E4 G4]', '[C4 E4 G4] 2', '[F4 A4 C5]', '[D4 F#4 A4]'],
+  },
+  {
     title: 'Durações',
     description: 'Notas com durações específicas',
     icon: Clock,
     subcomponents: ['C4 0.5', 'D4 2', 'E4 1.5', 'F4 4'],
+  },
+  {
+    title: 'Loops',
+    description: 'Repetições e estruturas',
+    icon: Repeat,
+    subcomponents: ['loop 2 {\n  C4\n  D4\n}', '(C4 D4) * 3', 'loop 4 {\n  [C4 E4]\n  rest\n}'],
   },
   {
     title: 'Controles',
@@ -76,7 +88,9 @@ export function ComponentsSidebar({ onAddComponent }: ComponentsSidebarProps) {
         <h3 className="text-sm font-medium mb-2">Sintaxe Básica:</h3>
         <div className="text-xs space-y-1 text-muted-foreground">
           <div><code>C4</code> - toca nota C na 4ª oitava</div>
-          <div><code>C4 2</code> - toca C4 por 2 beats</div>
+          <div><code>[C4 E4 G4]</code> - toca acorde de Dó maior</div>
+          <div><code>(C4 D4) * 3</code> - repete sequência 3x</div>
+          <div><code>loop 2 {'{ ... }'}</code> - loop de 2 iterações</div>
           <div><code>rest</code> - pausa de 1 beat</div>
           <div><code>slow</code> - deixa mais lento</div>
           <div><code>fast</code> - deixa mais rápido</div>

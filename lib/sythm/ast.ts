@@ -8,6 +8,9 @@ export type ASTNode =
   | SlowNode 
   | FastNode 
   | CommentNode
+  | ChordNode
+  | LoopNode
+  | GroupNode
   | ProgramNode;
 
 export interface BaseNode {
@@ -64,6 +67,33 @@ export interface CommentNode extends BaseNode {
 }
 
 /**
+ * Nó para acordes (múltiplas notas simultâneas)
+ */
+export interface ChordNode extends BaseNode {
+  type: 'Chord';
+  notes: string[]; // ex: ["C4", "E4", "G4"]
+  duration?: number; // duração em beats (opcional, padrão 1)
+}
+
+/**
+ * Nó para loops/repetições
+ */
+export interface LoopNode extends BaseNode {
+  type: 'Loop';
+  iterations: number; // quantas vezes repetir
+  body: ASTNode[]; // comandos a repetir
+}
+
+/**
+ * Nó para agrupamento com multiplicação (C4 D4) * 2
+ */
+export interface GroupNode extends BaseNode {
+  type: 'Group';
+  body: ASTNode[]; // comandos agrupados
+  multiplier?: number; // quantas vezes repetir (opcional)
+}
+
+/**
  * Utilitário para criar nós AST
  */
 export const createNode = {
@@ -102,6 +132,30 @@ export const createNode = {
   comment: (content: string, line?: number, column?: number): CommentNode => ({
     type: 'Comment',
     content,
+    line,
+    column
+  }),
+
+  chord: (notes: string[], duration?: number, line?: number, column?: number): ChordNode => ({
+    type: 'Chord',
+    notes,
+    duration,
+    line,
+    column
+  }),
+
+  loop: (iterations: number, body: ASTNode[], line?: number, column?: number): LoopNode => ({
+    type: 'Loop',
+    iterations,
+    body,
+    line,
+    column
+  }),
+
+  group: (body: ASTNode[], multiplier?: number, line?: number, column?: number): GroupNode => ({
+    type: 'Group',
+    body,
+    multiplier,
     line,
     column
   })

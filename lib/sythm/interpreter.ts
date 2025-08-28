@@ -9,17 +9,20 @@ import {
   RestNode, 
   SlowNode, 
   FastNode, 
-  CommentNode 
+  CommentNode,
+  ChordNode,
+  LoopNode,
+  GroupNode
 } from './ast';
 import { SythmAudioEngine } from './audio-engine';
 
 export interface InterpreterOptions {
   onNotePlay?: (note: string, duration: number) => void;
+  onChordPlay?: (notes: string[], duration: number) => void;
   onRest?: (duration: number) => void;
   onSpeedChange?: (modifier: number) => void;
   onError?: (error: Error, node: ASTNode) => void;
   onComplete?: () => void;
-  // onLineExecute?: (line: number) => void;  // COMENTAR ESTA LINHA
 }
 
 export class SythmInterpreter {
@@ -28,7 +31,6 @@ export class SythmInterpreter {
   private currentTime: number = 0;
   private isRunning: boolean = false;
   private totalDuration: number = 0;
-  // private currentLine: number = -1;  // COMENTAR ESTA LINHA
 
   constructor(engine: SythmAudioEngine, options: InterpreterOptions = {}) {
     this.engine = engine;
@@ -46,7 +48,6 @@ export class SythmInterpreter {
     this.isRunning = true;
     this.currentTime = 0;
     this.totalDuration = 0;
-    // this.currentLine = -1;  // COMENTAR ESTA LINHA
     
     // Reseta velocidade para normal no início
     this.engine.setNormalSpeed();
@@ -59,21 +60,8 @@ export class SythmInterpreter {
           break; // Parou durante execução
         }
         
-        // COMENTAR ESTE BLOCO INTEIRO
-        /*
-        // Reporta linha atual sendo executada
-        if (node.line !== undefined) {
-          this.currentLine = node.line;
-          this.options.onLineExecute?.(node.line);
-        }
-        */
-        
         await this.executeNode(node);
       }
-      
-      // COMENTAR ESTAS LINHAS
-      // this.currentLine = -1;
-      // this.options.onLineExecute?.(-1);
       
       // Aguarda um pouco mais para garantir que todas as notas terminaram
       const finalWaitTime = Math.max(this.totalDuration * 1000, 1000);
@@ -86,8 +74,6 @@ export class SythmInterpreter {
       
     } catch (error) {
       this.isRunning = false;
-      // this.currentLine = -1;  // COMENTAR ESTA LINHA
-      // this.options.onLineExecute?.(-1);  // COMENTAR ESTA LINHA
       throw error;
     }
   }
@@ -100,8 +86,6 @@ export class SythmInterpreter {
     this.engine.stop();
     this.currentTime = 0;
     this.totalDuration = 0;
-    // this.currentLine = -1;  // COMENTAR ESTA LINHA
-    // this.options.onLineExecute?.(-1);  // COMENTAR ESTA LINHA
   }
 
   /**
@@ -133,6 +117,15 @@ export class SythmInterpreter {
           // Comentários são processados instantaneamente
           await this.sleep(100); // Pequena pausa para visualização
           break;
+        case 'Chord':
+          await this.executeChord(node as ChordNode);
+          break;
+        case 'Loop':
+          await this.executeLoop(node as LoopNode);
+          break;
+        case 'Group':
+          await this.executeGroup(node as GroupNode);
+          break;
         default:
           console.warn(`Unknown node type: ${node.type}`);
       }
@@ -161,6 +154,69 @@ export class SythmInterpreter {
     const noteDuration = beatDuration * duration;
     this.currentTime += noteDuration;
     this.totalDuration = Math.max(this.totalDuration, this.currentTime + noteDuration);
+  }
+
+  /**
+   * Executa um acorde (múltiplas notas simultâneas)
+   */
+  private async executeChord(node: ChordNode): Promise<void> {
+    const duration = node.duration ?? 1; // duração padrão de 1 beat
+    const beatDuration = this.engine.getBeatDuration();
+    const realDurationMs = beatDuration * duration * 1000; // Converte para millisegundos
+    
+    // Toca o acorde
+    this.engine.playChord(node.notes, duration, this.currentTime);
+    this.options.onChordPlay?.(node.notes, duration);
+    
+    // AGUARDA a duração real do acorde antes de continuar
+    await this.sleep(realDurationMs);
+    
+    // Avança o tempo apenas após o acorde ter sido "tocado"
+    const chordDuration = beatDuration * duration;
+    this.currentTime += chordDuration;
+    this.totalDuration = Math.max(this.totalDuration, this.currentTime + chordDuration);
+  }
+
+  /**
+   * Executa um loop
+   */
+  private async executeLoop(node: LoopNode): Promise<void> {
+    for (let i = 0; i < node.iterations; i++) {
+      if (!this.isRunning) {
+        break; // Parou durante execução
+      }
+      
+      // Executa cada comando do corpo do loop
+      for (const bodyNode of node.body) {
+        if (!this.isRunning) {
+          break;
+        }
+        
+        await this.executeNode(bodyNode);
+      }
+    }
+  }
+
+  /**
+   * Executa um grupo (com possível multiplicação)
+   */
+  private async executeGroup(node: GroupNode): Promise<void> {
+    const iterations = node.multiplier ?? 1; // se não tem multiplicador, executa 1 vez
+    
+    for (let i = 0; i < iterations; i++) {
+      if (!this.isRunning) {
+        break; // Parou durante execução
+      }
+      
+      // Executa cada comando do corpo do grupo
+      for (const bodyNode of node.body) {
+        if (!this.isRunning) {
+          break;
+        }
+        
+        await this.executeNode(bodyNode);
+      }
+    }
   }
 
   /**
@@ -209,7 +265,6 @@ export class SythmInterpreter {
     return {
       isRunning: this.isRunning,
       currentTime: this.currentTime,
-      // currentLine: this.currentLine,  // COMENTAR ESTA LINHA
       totalDuration: this.totalDuration,
       engineState: this.engine.getState()
     };
