@@ -1,8 +1,11 @@
 'use client'
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { InstrumentSelector } from './InstrumentSelector'
 import { Music, Clock, Volume2, Pause, Repeat, Layers } from 'lucide-react'
 import type { Component } from '@/types/sythm'
+import type { InstrumentType } from '@/types/instruments'
+import { useState } from 'react'
 
 const COMPONENTS: Component[] = [
   {
@@ -51,13 +54,35 @@ const COMPONENTS: Component[] = [
 
 interface ComponentsSidebarProps {
   onAddComponent: (component: string) => void
+  currentInstrument?: InstrumentType
+  onInstrumentChange?: (instrument: InstrumentType) => void
 }
 
-export function ComponentsSidebar({ onAddComponent }: ComponentsSidebarProps) {
+export function ComponentsSidebar({ 
+  onAddComponent, 
+  currentInstrument = 'default',
+  onInstrumentChange = () => {}
+}: ComponentsSidebarProps) {
+  const [selectedInstrument, setSelectedInstrument] = useState<InstrumentType>(currentInstrument)
+
+  const handleInstrumentChange = (instrument: InstrumentType) => {
+    setSelectedInstrument(instrument)
+    onInstrumentChange(instrument)
+  }
+
   return (
     <div className="w-80 p-4 bg-sidebar border-l border-border overflow-y-auto">
       <h2 className="text-lg font-semibold mb-4 text-sidebar-foreground">Componentes</h2>
-      <div className="space-y-3">
+      
+      <div className="space-y-4">
+        {/* Seletor de Instrumentos */}
+        <InstrumentSelector
+          currentInstrument={selectedInstrument}
+          onInstrumentChange={handleInstrumentChange}
+          onAddToCode={onAddComponent}
+        />
+
+        {/* Componentes musicais existentes */}
         {COMPONENTS.map((component, index) => (
           <Card key={index} className="bg-card border-border">
             <CardHeader className="pb-2">
@@ -85,15 +110,18 @@ export function ComponentsSidebar({ onAddComponent }: ComponentsSidebarProps) {
       </div>
       
       <div className="mt-6 p-3 bg-muted rounded-lg">
-        <h3 className="text-sm font-medium mb-2">Sintaxe Básica:</h3>
+        <h3 className="text-sm font-medium mb-2">Sintaxe Atualizada:</h3>
         <div className="text-xs space-y-1 text-muted-foreground">
+          <div><code>@bass</code> - muda para baixo sintetizado</div>
+          <div><code>@kick</code> - muda para bumbo eletrônico</div>
+          <div><code>@lead</code> - muda para synth lead</div>
+          <div><code>@pad</code> - muda para texturas atmosféricas</div>
           <div><code>C4</code> - toca nota C na 4ª oitava</div>
           <div><code>[C4 E4 G4]</code> - toca acorde de Dó maior</div>
           <div><code>(C4 D4) * 3</code> - repete sequência 3x</div>
           <div><code>loop 2 {'{ ... }'}</code> - loop de 2 iterações</div>
           <div><code>rest</code> - pausa de 1 beat</div>
-          <div><code>slow</code> - deixa mais lento</div>
-          <div><code>fast</code> - deixa mais rápido</div>
+          <div><code>slow</code> / <code>fast</code> - controle de tempo</div>
         </div>
       </div>
     </div>

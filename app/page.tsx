@@ -10,6 +10,7 @@ import { UnsavedChangesDialog } from '@/components/sythm-ide/UnsavedChangesDialo
 import { HelpDialog } from '@/components/sythm-ide/HelpDialog'
 import { useAudioContext } from '@/hooks/use-audio-context'
 import { DEFAULT_CODE, NEW_COMPOSITION_CODE } from '@/lib/audio-utils'
+import type { InstrumentType } from '@/types/instruments'
 
 export default function SythmIDE() {
   const [code, setCode] = useState(DEFAULT_CODE)
@@ -20,7 +21,15 @@ export default function SythmIDE() {
   const [pendingAction, setPendingAction] = useState<'new' | 'open' | null>(null)
   const [pendingFileData, setPendingFileData] = useState<{fileName: string, content: string} | null>(null)
 
-  const { audioContext,executeCode, stopExecution, updateBPM, getState } = useAudioContext()
+  const { 
+    audioContext, 
+    currentInstrument, 
+    executeCode, 
+    stopExecution, 
+    updateBPM, 
+    changeInstrument,
+    getState 
+  } = useAudioContext()
 
   const hasUnsavedChanges = (currentCode: string) => {
     return currentCode.trim() && currentCode !== DEFAULT_CODE && currentCode !== NEW_COMPOSITION_CODE
@@ -105,6 +114,10 @@ export default function SythmIDE() {
     updateBPM(newBpm)
   }
 
+  const handleInstrumentChange = (instrument: InstrumentType) => {
+    changeInstrument(instrument)
+  }
+
   return (
     <div className="h-screen flex flex-col bg-background text-foreground font-mono">
       <Header
@@ -124,7 +137,11 @@ export default function SythmIDE() {
           code={code} 
           onChange={setCode} 
         />
-        <ComponentsSidebar onAddComponent={handleAddComponent} />
+        <ComponentsSidebar 
+          onAddComponent={handleAddComponent}
+          currentInstrument={currentInstrument}
+          onInstrumentChange={handleInstrumentChange}
+        />
       </div>
 
       <SaveDialog

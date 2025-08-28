@@ -12,15 +12,18 @@ import {
   CommentNode,
   ChordNode,
   LoopNode,
-  GroupNode
+  GroupNode,
+  InstrumentNode
 } from './ast';
 import { SythmAudioEngine } from './audio-engine';
+import type { InstrumentType } from '@/types/instruments';
 
 export interface InterpreterOptions {
   onNotePlay?: (note: string, duration: number) => void;
   onChordPlay?: (notes: string[], duration: number) => void;
   onRest?: (duration: number) => void;
   onSpeedChange?: (modifier: number) => void;
+  onInstrumentChange?: (instrument: InstrumentType) => void;
   onError?: (error: Error, node: ASTNode) => void;
   onComplete?: () => void;
 }
@@ -49,8 +52,9 @@ export class SythmInterpreter {
     this.currentTime = 0;
     this.totalDuration = 0;
     
-    // Reseta velocidade para normal no início
+    // Reseta velocidade e instrumento para normal no início
     this.engine.setNormalSpeed();
+    this.engine.setCurrentInstrument('default');
 
     try {
       await this.engine.initialize();
@@ -126,6 +130,9 @@ export class SythmInterpreter {
         case 'Group':
           await this.executeGroup(node as GroupNode);
           break;
+        case 'Instrument':
+          await this.executeInstrument(node as InstrumentNode);
+          break;
         default:
           console.warn(`Unknown node type: ${node.type}`);
       }
@@ -133,6 +140,28 @@ export class SythmInterpreter {
       this.options.onError?.(error as Error, node);
       throw error;
     }
+  }
+
+  /**
+   * Executa seleção de instrumento
+   */
+  private async executeInstrument(node: InstrumentNode): Promise<void> {
+    const instrumentType = node.instrument as InstrumentType;
+    
+    // Valida se o instrumento existe
+    const availableInstruments = this.engine.getAvailableInstruments();
+    const isValid = availableInstruments.some(inst => inst.type === instrumentType);
+    
+    if (!isValid) {
+      throw new Error(`Unknown instrument: ${instrumentType}`);
+    }
+    
+    // Muda o instrumento atual
+    this.engine.setCurrentInstrument(instrumentType);
+    this.options.onInstrumentChange?.(instrumentType);
+    
+    // Comando de instrumento é instantâneo, apenas uma pequena pausa visual
+    await this.sleep(200);
   }
 
   /**

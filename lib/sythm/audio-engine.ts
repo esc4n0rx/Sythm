@@ -3,6 +3,9 @@
  */
 
 import { getNoteFrequency } from './note-frequencies';
+import { InstrumentFactory } from './instruments';
+import { BaseInstrument } from './instruments/base-instrument';
+import type { InstrumentType } from '@/types/instruments';
 
 export interface AudioConfig {
   baseBeatsPerMinute: number;
@@ -16,6 +19,10 @@ export class SythmAudioEngine {
   private config: AudioConfig;
   private timeModifier: number = 1; // 1 = normal, 0.5 = slow, 1.5 = fast
   private scheduledNodes: Set<AudioNode> = new Set();
+  
+  // Sistema de instrumentos
+  private instruments: Map<InstrumentType, BaseInstrument> = new Map();
+  private currentInstrument: InstrumentType = 'default';
 
   constructor(config: Partial<AudioConfig> = {}) {
     this.config = {
@@ -38,7 +45,44 @@ export class SythmAudioEngine {
       if (this.audioContext.state === 'suspended') {
         await this.audioContext.resume();
       }
+
+      // Inicializa instrumentos padrão
+      this.initializeInstruments();
     }
+  }
+
+  /**
+   * Inicializa todos os instrumentos disponíveis
+   */
+  private initializeInstruments(): void {
+    if (!this.audioContext) return;
+
+    const instrumentTypes: InstrumentType[] = [
+      'default', 'bass', 'kick', 'snare', 'hihat', 'lead', 'pad'
+    ];
+
+    instrumentTypes.forEach(type => {
+      const instrument = InstrumentFactory.createInstrument(
+        this.audioContext!,
+        type,
+        { volume: this.config.masterVolume }
+      );
+      this.instruments.set(type, instrument);
+    });
+  }
+
+  /**
+   * Seleciona o instrumento atual
+   */
+  setCurrentInstrument(instrumentType: InstrumentType): void {
+    this.currentInstrument = instrumentType;
+  }
+
+  /**
+   * Obtém o instrumento atual
+   */
+  getCurrentInstrument(): BaseInstrument | null {
+    return this.instruments.get(this.currentInstrument) || null;
   }
 
   /**
@@ -46,7 +90,7 @@ export class SythmAudioEngine {
    */
   stop(): void {
     if (this.audioContext) {
-      // Para todos os nós agendados
+      // Para todos os nós agendados (compatibilidade com código antigo)
       this.scheduledNodes.forEach(node => {
         try {
           if (node instanceof OscillatorNode) {
@@ -57,29 +101,70 @@ export class SythmAudioEngine {
         }
       });
       this.scheduledNodes.clear();
+
+      // Para todos os instrumentos
+      this.instruments.forEach(instrument => {
+        instrument.stop();
+      });
     }
   }
 
   /**
-   * Toca uma nota musical
+   * Toca uma nota musical usando o instrumento atual
    */
   playNote(note: string, duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
     if (!this.audioContext) {
       throw new Error('Audio context not initialized');
     }
 
+    const instrument = this.getCurrentInstrument();
+    if (instrument) {
+      // Usa o sistema de instrumentos
+      const frequency = getNoteFrequency(note);
+      const actualDuration = this.calculateActualDuration(duration);
+      instrument.playNote(frequency, actualDuration, startTime, 1);
+    } else {
+      // Fallback para o sistema antigo
+      this.playNoteLegacy(note, duration, startTime);
+    }
+  }
+
+  /**
+   * Toca múltiplas notas simultaneamente (acorde) usando o instrumento atual
+   */
+  playChord(notes: string[], duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
+    if (!this.audioContext) {
+      throw new Error('Audio context not initialized');
+    }
+
+    const instrument = this.getCurrentInstrument();
+    if (instrument) {
+      // Usa o sistema de instrumentos
+      const frequencies = notes.map(note => getNoteFrequency(note));
+      const actualDuration = this.calculateActualDuration(duration);
+      instrument.playChord(frequencies, actualDuration, startTime, 1);
+    } else {
+      // Fallback para o sistema antigo
+      this.playChordLegacy(notes, duration, startTime);
+    }
+  }
+
+  /**
+   * Sistema antigo de tocar notas (mantido para compatibilidade)
+   */
+  private playNoteLegacy(note: string, duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
     try {
       const frequency = getNoteFrequency(note);
       const actualDuration = this.calculateActualDuration(duration);
-      const actualStartTime = this.audioContext.currentTime + startTime;
+      const actualStartTime = this.audioContext!.currentTime + startTime;
 
       // Cria oscilador
-      const oscillator = this.audioContext.createOscillator();
-      const gainNode = this.audioContext.createGain();
+      const oscillator = this.audioContext!.createOscillator();
+      const gainNode = this.audioContext!.createGain();
 
       // Conecta os nós
       oscillator.connect(gainNode);
-      gainNode.connect(this.audioContext.destination);
+      gainNode.connect(this.audioContext!.destination);
 
       // Configura o oscilador
       oscillator.frequency.setValueAtTime(frequency, actualStartTime);
@@ -135,20 +220,16 @@ export class SythmAudioEngine {
   }
 
   /**
-   * Toca múltiplas notas simultaneamente (acorde)
+   * Sistema antigo de tocar acordes (mantido para compatibilidade)
    */
-  playChord(notes: string[], duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
-    if (!this.audioContext) {
-      throw new Error('Audio context not initialized');
-    }
-
+  private playChordLegacy(notes: string[], duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
     try {
       const actualDuration = this.calculateActualDuration(duration);
-      const actualStartTime = this.audioContext.currentTime + startTime;
+      const actualStartTime = this.audioContext!.currentTime + startTime;
 
       // Cria um nó de ganho mestre para o acorde
-      const masterGain = this.audioContext.createGain();
-      masterGain.connect(this.audioContext.destination);
+      const masterGain = this.audioContext!.createGain();
+      masterGain.connect(this.audioContext!.destination);
 
       // Volume ajustado para evitar distorção com múltiplas notas
       const chordVolume = this.config.masterVolume / Math.sqrt(notes.length);
@@ -283,25 +364,48 @@ export class SythmAudioEngine {
    */
   updateConfig(newConfig: Partial<AudioConfig>): void {
     this.config = { ...this.config, ...newConfig };
+    
+    // Atualiza configuração de todos os instrumentos
+    this.instruments.forEach(instrument => {
+      instrument.updateConfig({ volume: this.config.masterVolume });
+    });
   }
 
   /**
-   * Obtém estado atual
+   * Obtém lista de instrumentos disponíveis
    */
-  getState() {
-    return {
-      isInitialized: !!this.audioContext,
-      isPlaying: this.scheduledNodes.size > 0,
-      timeModifier: this.timeModifier,
-      config: { ...this.config }
-    };
+  getAvailableInstruments() {
+    return InstrumentFactory.getAvailableInstruments();
   }
+
+/**
+* Obtém estado atual
+*/
+getState() {
+ return {
+   isInitialized: !!this.audioContext,
+   isPlaying: this.scheduledNodes.size > 0,
+   timeModifier: this.timeModifier,
+   currentInstrument: this.currentInstrument,
+   availableInstruments: this.getAvailableInstruments(),
+   config: { ...this.config }
+ };
+}
 
   /**
    * Limpa recursos
    */
   dispose(): void {
     this.stop();
+    
+    // Dispose de todos os instrumentos
+    this.instruments.forEach(instrument => {
+      if (instrument.dispose) {
+        instrument.dispose();
+      }
+    });
+    this.instruments.clear();
+    
     if (this.audioContext) {
       this.audioContext.close();
       this.audioContext = null;

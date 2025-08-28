@@ -1,11 +1,11 @@
 export interface HighlightedPart {
     text: string
-    type: 'keyword' | 'note' | 'number' | 'command' | 'comment' | 'bracket' | 'symbol' | 'default'
+    type: 'keyword' | 'note' | 'number' | 'command' | 'comment' | 'bracket' | 'symbol' | 'instrument' | 'default'
   }
   
   export function tokenizeCode(line: string): HighlightedPart[] {
-    // Regex para diferentes tipos de tokens
-    const tokenRegex = /(\/\/.*$|loop|rest|slow|fast|\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|\b[A-G][#b]?\d+\b|\b\d+\.?\d*\b|[[\](){}*]|\S+)/g
+    // Regex para diferentes tipos de tokens - incluindo instrumentos
+    const tokenRegex = /(\/\/.*$|loop|rest|slow|fast|@\w+|\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|\b[A-G][#b]?\d+\b|\b\d+\.?\d*\b|[[\](){}*]|\S+)/g
     
     const parts = line.split(tokenRegex).filter(part => part !== '')
     
@@ -13,6 +13,11 @@ export interface HighlightedPart {
       // Comentários
       if (/^\/\/.*$/.test(part)) {
         return { text: part, type: 'comment' as const }
+      }
+      
+      // Instrumentos (@bass, @kick, etc.)
+      if (/^@\w+$/.test(part)) {
+        return { text: part, type: 'instrument' as const }
       }
       
       // Comandos de controle
@@ -58,6 +63,7 @@ export interface HighlightedPart {
       keyword: { color: '#8b5cf6', fontWeight: 600 }, // Roxo para palavras-chave
       bracket: { color: '#ec4899', fontWeight: 600 }, // Rosa para acordes
       symbol: { color: '#f97316', fontWeight: 600 }, // Laranja para símbolos
+      instrument: { color: '#a855f7', fontWeight: 700, textDecoration: 'underline' }, // Roxo destacado para instrumentos
       default: { color: '#e5e7eb' }, // Cor padrão
     }
     return styles[type]

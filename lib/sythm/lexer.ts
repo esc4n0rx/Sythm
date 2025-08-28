@@ -16,6 +16,7 @@ export interface Token {
     SLOW = 'SLOW',      // slow
     FAST = 'FAST',      // fast
     LOOP = 'LOOP',      // loop
+    INSTRUMENT = 'INSTRUMENT', // @bass, @kick, @lead, etc.
     
     // Literais
     NUMBER = 'NUMBER',   // 1, 2.5, 0.25, etc.
@@ -28,6 +29,7 @@ export interface Token {
     LBRACE = 'LBRACE',   // {
     RBRACE = 'RBRACE',   // }
     ASTERISK = 'ASTERISK', // *
+    AT = 'AT',           // @
     
     // Especiais
     NEWLINE = 'NEWLINE',
@@ -100,6 +102,8 @@ export interface Token {
           return this.makeToken(TokenType.RBRACE, char, startLine, startColumn);
         case '*':
           return this.makeToken(TokenType.ASTERISK, char, startLine, startColumn);
+        case '@':
+          return this.scanInstrument(startLine, startColumn);
         case '\n':
           this.line++;
           this.column = 1;
@@ -127,6 +131,24 @@ export interface Token {
       
       // Token desconhecido
       return this.makeToken(TokenType.UNKNOWN, char, startLine, startColumn);
+    }
+
+    /**
+     * Escaneia um instrumento (@bass, @kick, etc.)
+     */
+    private scanInstrument(line: number, column: number): Token {
+      // Já consumiu o '@'
+      const start = this.position;
+      
+      // Lê o nome do instrumento
+      while (this.isAlphaNumeric(this.peek())) {
+        this.advance();
+      }
+      
+      const instrumentName = this.source.substring(start, this.position);
+      const value = '@' + instrumentName;
+      
+      return this.makeToken(TokenType.INSTRUMENT, value, line, column);
     }
   
     /**

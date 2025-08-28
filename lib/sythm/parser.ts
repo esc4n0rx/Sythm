@@ -76,6 +76,11 @@ export class SythmParser {
         return this.parseLoop();
       }
 
+      // Instrumento
+      if (this.check(TokenType.INSTRUMENT)) {
+        return this.parseInstrument();
+      }
+
       // Acorde [C4 E4 G4]
       if (this.check(TokenType.LBRACKET)) {
         return this.parseChord();
@@ -108,6 +113,17 @@ export class SythmParser {
       this.synchronize();
       throw error;
     }
+  }
+
+  /**
+   * Parse de instrumento
+   */
+  private parseInstrument(): ASTNode {
+    const token = this.advance();
+    const instrumentName = token.value.substring(1); // Remove o '@'
+    
+    this.consumeNewlineOrEOF();
+    return createNode.instrument(instrumentName, token.line, token.column);
   }
 
   /**
@@ -307,9 +323,11 @@ export class SythmParser {
         element = this.parseSlow();
       } else if (this.check(TokenType.FAST)) {
         element = this.parseFast();
+      } else if (this.check(TokenType.INSTRUMENT)) {
+        element = this.parseInstrument();
       } else {
         throw new SythmParseError(
-          'Expected note, chord, rest, slow, or fast in group',
+          'Expected note, chord, rest, slow, fast, or instrument in group',
           this.peek().line,
           this.peek().column,
           this.peek()
@@ -483,7 +501,8 @@ export class SythmParser {
       TokenType.NOTE,       // Outra nota na sequência
       TokenType.REST,       // Rest na sequência
       TokenType.LBRACKET,   // Início de acorde
-      TokenType.NUMBER      // Possível duração
+      TokenType.NUMBER,     // Possível duração
+      TokenType.INSTRUMENT  // Instrumento na sequência
     ]);
   }
 
@@ -525,6 +544,7 @@ export class SythmParser {
            token.type === TokenType.LBRACKET ||
            token.type === TokenType.LPAREN ||
            token.type === TokenType.COMMENT ||
+           token.type === TokenType.INSTRUMENT ||
            token.type === TokenType.EOF;
   }
 

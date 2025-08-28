@@ -11,6 +11,7 @@ export type ASTNode =
   | ChordNode
   | LoopNode
   | GroupNode
+  | InstrumentNode
   | ProgramNode;
 
 export interface BaseNode {
@@ -94,6 +95,14 @@ export interface GroupNode extends BaseNode {
 }
 
 /**
+ * Nó para seleção de instrumento
+ */
+export interface InstrumentNode extends BaseNode {
+  type: 'Instrument';
+  instrument: string; // ex: "bass", "kick", "lead"
+}
+
+/**
  * Utilitário para criar nós AST
  */
 export const createNode = {
@@ -156,6 +165,13 @@ export const createNode = {
     type: 'Group',
     body,
     multiplier,
+    line,
+    column
+  }),
+
+  instrument: (instrument: string, line?: number, column?: number): InstrumentNode => ({
+    type: 'Instrument',
+    instrument,
     line,
     column
   })

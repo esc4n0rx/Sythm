@@ -6,6 +6,7 @@ import { SythmParser, SythmParseError } from '@/lib/sythm/parser'
 import { SythmAudioEngine } from '@/lib/sythm/audio-engine'
 import { SythmInterpreter } from '@/lib/sythm/interpreter'
 import type { AudioContextType } from '@/types/sythm'
+import type { InstrumentType } from '@/types/instruments'
 
 export function useAudioContext() {
   const [audioContext, setAudioContext] = useState<AudioContextType>({
@@ -13,6 +14,8 @@ export function useAudioContext() {
     isPlaying: false,
     bpm: 120,
   })
+
+  const [currentInstrument, setCurrentInstrument] = useState<InstrumentType>('default')
 
   const [engine] = useState(() => new SythmAudioEngine({ baseBeatsPerMinute: 120 }))
   const [interpreter] = useState(() => new SythmInterpreter(engine, {
@@ -27,6 +30,10 @@ export function useAudioContext() {
     },
     onSpeedChange: (modifier) => {
       console.log(`Speed changed: ${modifier}x`)
+    },
+    onInstrumentChange: (instrument) => {
+      console.log(`Instrument changed to: ${instrument}`)
+      setCurrentInstrument(instrument)
     },
     onError: (error, node) => {
       console.error('Interpreter error:', error, node)
@@ -101,11 +108,22 @@ export function useAudioContext() {
     setAudioContext(prev => ({ ...prev, bpm: newBpm }))
   }, [engine])
 
+  /**
+   * Muda instrumento atual manualmente
+   */
+  const changeInstrument = useCallback((instrument: InstrumentType) => {
+    engine.setCurrentInstrument(instrument)
+    setCurrentInstrument(instrument)
+  }, [engine])
+
   return {
     audioContext,
+    currentInstrument,
     executeCode,
     stopExecution,
     updateBPM,
-    getState: () => interpreter.getState()
+    changeInstrument,
+    getState: () => interpreter.getState(),
+    getAvailableInstruments: () => engine.getAvailableInstruments()
   }
 }
