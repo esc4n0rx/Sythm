@@ -142,6 +142,15 @@ export default function SythmIDE() {
     setCode(newCode)
   }
 
+  // Função para executar o código
+  const handleExecute = async () => {
+    try {
+      await executeCode(code)
+    } catch (error) {
+      console.error('Erro ao executar código:', error)
+    }
+  }
+
   return (
     <div className="h-screen flex flex-col bg-background">
       <Header
@@ -149,14 +158,11 @@ export default function SythmIDE() {
         onOpen={handleOpen}
         onSave={() => setShowSaveDialog(true)}
         onHelp={() => setShowHelpDialog(true)}
-        onMultiTrackExample={handleMultiTrackExample}
         isPlaying={audioContext.isPlaying}
         bpm={audioContext.bpm}
-        currentInstrument={currentInstrument}
-        onPlay={() => executeCode(code)}
+        onExecute={handleExecute} // Corrigido: era onPlay antes
         onStop={stopExecution}
-        onBpmChange={updateBPM}
-        onInstrumentChange={changeInstrument}
+        onBPMChange={updateBPM}
       />
       
       <div className="flex-1 flex overflow-hidden">
@@ -164,9 +170,6 @@ export default function SythmIDE() {
           <CodeEditor
             code={code}
             onChange={setCode}
-            onPlay={() => executeCode(code)}
-            onStop={stopExecution}
-            isPlaying={audioContext.isPlaying}
           />
         </div>
         
@@ -177,7 +180,7 @@ export default function SythmIDE() {
               <TrackMixer
                 multiTrackState={multiTrackState}
                 isPlaying={audioContext.isPlaying}
-                onPlay={() => executeCode(code)}
+                onPlay={handleExecute} // Corrigido: usar handleExecute
                 onStop={stopExecution}
                 onTrackMute={muteTrack}
                 onTrackUnmute={unmuteTrack}

@@ -1,27 +1,63 @@
 'use client'
 
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Textarea } from '@/components/ui/textarea'
 import { tokenizeCode, getColorForType } from '@/lib/syntax-highlighter'
 
 interface CodeEditorProps {
   code: string
   onChange: (code: string) => void
-  // currentExecutingLine?: number  // COMENTAR ESTA LINHA
 }
 
-export function CodeEditor({ code, onChange /* currentExecutingLine = -1 */ }: CodeEditorProps) {  // COMENTAR O PARÂMETRO
+export function CodeEditor({ code, onChange }: CodeEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const highlightRef = useRef<HTMLDivElement>(null)
   const lineNumbersRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  
   const [scrollTop, setScrollTop] = useState(0)
   const [scrollLeft, setScrollLeft] = useState(0)
+  const [viewportHeight, setViewportHeight] = useState(0)
+
+  // Configuração do virtual scroll
+  const LINE_HEIGHT = 24 // 1.5rem
+  const BUFFER_LINES = 10 // Linhas extras para suavizar o scroll
 
   // Calcula o número total de linhas
-  const lines = code.split('\n')
+  const lines = useMemo(() => code.split('\n'), [code])
   const lineCount = lines.length
 
-  // Sincroniza o scroll entre textarea, highlight overlay e line numbers
+  // Calcula quais linhas estão visíveis
+  const visibleRange = useMemo(() => {
+    if (viewportHeight === 0) {
+      return { start: 0, end: Math.min(50, lineCount) }
+    }
+
+    const visibleLines = Math.ceil(viewportHeight / LINE_HEIGHT)
+    const startLine = Math.floor(scrollTop / LINE_HEIGHT)
+    
+    const start = Math.max(0, startLine - BUFFER_LINES)
+    const end = Math.min(lineCount, startLine + visibleLines + BUFFER_LINES * 2)
+    
+    return { start, end }
+  }, [scrollTop, viewportHeight, lineCount])
+
+  // Observador de redimensionamento para calcular altura do viewport
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) {
+        setViewportHeight(entry.contentRect.height)
+      }
+    })
+
+    resizeObserver.observe(containerRef.current)
+    return () => resizeObserver.disconnect()
+  }, [])
+
+  // Sincronização melhorada do scroll
   const handleScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
     const target = e.target as HTMLTextAreaElement
     const newScrollTop = target.scrollTop
@@ -30,95 +66,117 @@ export function CodeEditor({ code, onChange /* currentExecutingLine = -1 */ }: C
     setScrollTop(newScrollTop)
     setScrollLeft(newScrollLeft)
 
-    // Sincroniza o scroll do overlay de highlight
-    if (highlightRef.current) {
-      highlightRef.current.scrollTop = newScrollTop
-      highlightRef.current.scrollLeft = newScrollLeft
-    }
+    // Sincronização mais robusta
+    requestAnimationFrame(() => {
+      if (highlightRef.current) {
+        highlightRef.current.scrollTop = newScrollTop
+        highlightRef.current.scrollLeft = newScrollLeft
+      }
 
-    // Sincroniza o scroll vertical dos números de linha
-    if (lineNumbersRef.current) {
-      lineNumbersRef.current.scrollTop = newScrollTop
-    }
+      if (lineNumbersRef.current) {
+        lineNumbersRef.current.scrollTop = newScrollTop
+      }
+    })
   }, [])
 
-  // Sincroniza scroll quando o código muda externamente
+  // Sincronização quando código muda externamente
   useEffect(() => {
     if (textareaRef.current && highlightRef.current && lineNumbersRef.current) {
-      const scrollTop = textareaRef.current.scrollTop
-      const scrollLeft = textareaRef.current.scrollLeft
+      const currentScrollTop = textareaRef.current.scrollTop
+      const currentScrollLeft = textareaRef.current.scrollLeft
       
-      highlightRef.current.scrollTop = scrollTop
-      highlightRef.current.scrollLeft = scrollLeft
-      lineNumbersRef.current.scrollTop = scrollTop
+      highlightRef.current.scrollTop = currentScrollTop
+      highlightRef.current.scrollLeft = currentScrollLeft
+      lineNumbersRef.current.scrollTop = currentScrollTop
     }
   }, [code])
 
+  // Renderização virtualizada do código destacado
   const renderHighlightedCode = () => {
-    return lines.map((line, lineIndex) => {
-      // const actualLineNumber = lineIndex + 1  // COMENTAR ESTA LINHA
-      // const isExecuting = currentExecutingLine === actualLineNumber  // COMENTAR ESTA LINHA
-      
-      return (
-        <div 
-          key={lineIndex} 
-          className={`min-h-[1.5rem] leading-6 relative`}
-          // className={`min-h-[1.5rem] leading-6 relative ${isExecuting ? 'bg-primary/20 rounded-sm' : ''}`}  // COMENTAR E USAR LINHA DE CIMA
-        >
-          {/* COMENTAR TODO ESTE BLOCO
-          {isExecuting && (
-            <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary rounded-r-sm" />
-          )}
-          */}
-          
-          <div /* className={isExecuting ? 'pl-2' : ''} */>  {/* COMENTAR O CLASSNAME */}
-            {line === '' ? (
-              // Linha vazia precisa ter altura para manter alinhamento
-              <span className="opacity-0">.</span>
-            ) : (
-              tokenizeCode(line).map((part, partIndex) => (
-                <span key={partIndex} style={getColorForType(part.type)}>
-                  {part.text}
-                </span>
-              ))
-            )}
-          </div>
+    const totalHeight = lineCount * LINE_HEIGHT
+    const offsetTop = visibleRange.start * LINE_HEIGHT
+    
+    const visibleLines = lines.slice(visibleRange.start, visibleRange.end)
+    
+    return (
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div style={{ transform: `translateY(${offsetTop}px)` }}>
+          {visibleLines.map((line, index) => {
+            const lineIndex = visibleRange.start + index
+            
+            return (
+              <div 
+                key={lineIndex} 
+                className="min-h-[1.5rem] leading-6 relative"
+                style={{ height: LINE_HEIGHT }}
+              >
+                <div>
+                  {line === '' ? (
+                    // Linha vazia precisa ter altura para manter alinhamento
+                    <span className="opacity-0">.</span>
+                  ) : (
+                    tokenizeCode(line).map((part, partIndex) => (
+                      <span key={partIndex} style={getColorForType(part.type)}>
+                        {part.text}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
-      )
-    })
+      </div>
+    )
   }
 
+  // Renderização virtualizada dos números de linha
   const renderLineNumbers = () => {
-    return Array.from({ length: lineCount }, (_, i) => {
-      const lineNumber = i + 1
-      // const isExecuting = currentExecutingLine === lineNumber  // COMENTAR ESTA LINHA
-      
-      return (
-        <div
-          key={lineNumber}
-          className={`h-6 leading-6 text-right pr-2 select-none text-sm font-mono text-muted-foreground/60`}
-          // className={`h-6 leading-6 text-right pr-2 select-none text-sm font-mono relative ${isExecuting ? 'text-primary font-bold bg-primary/10' : 'text-muted-foreground/60'}`}  // COMENTAR E USAR LINHA DE CIMA
-        >
-          {/* COMENTAR TODO ESTE BLOCO
-          {isExecuting && (
-            <div className="absolute right-0 top-0 bottom-0 w-1 bg-primary" />
-          )}
-          */}
-          {lineNumber}
+    const totalHeight = lineCount * LINE_HEIGHT
+    const offsetTop = visibleRange.start * LINE_HEIGHT
+    
+    return (
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div style={{ transform: `translateY(${offsetTop}px)` }}>
+          {Array.from({ length: visibleRange.end - visibleRange.start }, (_, i) => {
+            const lineNumber = visibleRange.start + i + 1
+            
+            return (
+              <div
+                key={lineNumber}
+                className="h-6 leading-6 text-right pr-2 select-none text-sm font-mono text-muted-foreground/60"
+                style={{ height: LINE_HEIGHT }}
+              >
+                {lineNumber}
+              </div>
+            )
+          })}
         </div>
-      )
-    })
+      </div>
+    )
   }
 
   return (
     <div className="flex-1 p-4">
-      <div className="h-full bg-card rounded-lg border border-border overflow-hidden flex">
+      <style jsx>{`
+        .hide-scrollbar {
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
+      
+      <div 
+        ref={containerRef}
+        className="h-full bg-card rounded-lg border border-border overflow-hidden flex"
+      >
         {/* Line Numbers */}
         <div className="bg-sidebar border-r border-border">
           <div
             ref={lineNumbersRef}
-            className="overflow-hidden h-full w-12 py-4"
-            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+            className="overflow-hidden h-full w-12 py-4 hide-scrollbar"
           >
             <div className="text-sm">
               {renderLineNumbers()}
@@ -131,17 +189,15 @@ export function CodeEditor({ code, onChange /* currentExecutingLine = -1 */ }: C
           {/* Syntax Highlighting Overlay */}
           <div
             ref={highlightRef}
-            className="absolute inset-0 p-4 pointer-events-none font-mono text-sm leading-6 whitespace-pre-wrap overflow-auto"
+            className="absolute inset-0 p-4 pointer-events-none font-mono text-sm leading-6 whitespace-pre-wrap overflow-auto hide-scrollbar"
             style={{
-              color: '#e2e8f0',
-              scrollbarWidth: 'none',
-              msOverflowStyle: 'none',
+              color: '#e2e8f0'
             }}
           >
             {renderHighlightedCode()}
           </div>
 
-          {/* Invisible Textarea for Input */}
+          {/* Input Textarea */}
           <Textarea
             ref={textareaRef}
             value={code}
@@ -156,6 +212,7 @@ export function CodeEditor({ code, onChange /* currentExecutingLine = -1 */ }: C
               color: 'transparent',
               caretColor: '#ffffff',
               background: 'transparent',
+              lineHeight: `${LINE_HEIGHT}px`
             }}
           />
         </div>
