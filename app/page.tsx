@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Header } from '@/components/sythm-ide/Header'
 import { CodeEditor } from '@/components/sythm-ide/CodeEditor'
 import { ComponentsSidebar } from '@/components/sythm-ide/ComponentsSidebar'
+import { TrackMixer } from '@/components/sythm-ide/TrackMixer'
 import { SaveDialog } from '@/components/sythm-ide/SaveDialog'
 import { OpenDialog } from '@/components/sythm-ide/OpenDialog'
 import { UnsavedChangesDialog } from '@/components/sythm-ide/UnsavedChangesDialog'
@@ -11,6 +12,42 @@ import { HelpDialog } from '@/components/sythm-ide/HelpDialog'
 import { useAudioContext } from '@/hooks/use-audio-context'
 import { DEFAULT_CODE, NEW_COMPOSITION_CODE } from '@/lib/audio-utils'
 import type { InstrumentType } from '@/types/instruments'
+
+// Código exemplo para multitrack
+const MULTITRACK_EXAMPLE = `# Exemplo de Sequencer Multitrack
+# Define patterns reutilizáveis
+pattern beat = {
+  kick 1
+  rest 1
+  snare 1
+  rest 1
+}
+
+pattern bassline = {
+  C2 1
+  rest 1
+  G2 1
+  rest 1
+}
+
+# Define tracks independentes
+track drums {
+  @kick
+  loop 4 beat
+}
+
+track bass {
+  @bass
+  loop 4 bassline
+}
+
+track lead {
+  @lead
+  loop 2 {
+    C4 0.5 D4 0.5 E4 1
+    F4 0.5 G4 0.5 A4 1
+  }
+}`
 
 export default function SythmIDE() {
   const [code, setCode] = useState(DEFAULT_CODE)
@@ -24,15 +61,22 @@ export default function SythmIDE() {
   const { 
     audioContext, 
     currentInstrument, 
+    multiTrackState,
+    isMultiTrackMode,
     executeCode, 
     stopExecution, 
     updateBPM, 
     changeInstrument,
+    muteTrack,
+    unmuteTrack,
+    soloTrack,
+    unsoloTrack,
+    setTrackVolume,
     getState 
   } = useAudioContext()
 
   const hasUnsavedChanges = (currentCode: string) => {
-    return currentCode.trim() && currentCode !== DEFAULT_CODE && currentCode !== NEW_COMPOSITION_CODE
+    return currentCode.trim() && currentCode !== DEFAULT_CODE && currentCode !== NEW_COMPOSITION_CODE && currentCode !== MULTITRACK_EXAMPLE
   }
 
   const handleNew = () => {
@@ -44,6 +88,14 @@ export default function SythmIDE() {
     }
   }
 
+  const handleMultiTrackExample = () => {
+    if (hasUnsavedChanges(code)) {
+      alert('Salve suas alterações antes de carregar o exemplo')
+      return
+    }
+    setCode(MULTITRACK_EXAMPLE)
+  }
+
   const handleOpen = () => {
     if (hasUnsavedChanges(code)) {
       setPendingAction('open')
@@ -53,116 +105,125 @@ export default function SythmIDE() {
     }
   }
 
-  const handleSave = (fileName: string) => {
-    const blob = new Blob([code], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${fileName}.sythm`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    setShowSaveDialog(false)
-  }
-
-  const handleLoad = (fileName: string, content: string) => {
+  const handleFileLoad = (fileName: string, content: string) => {
     if (hasUnsavedChanges(code)) {
       setPendingFileData({ fileName, content })
-      setPendingAction('open')
-      setShowOpenDialog(false)
       setShowUnsavedDialog(true)
     } else {
       setCode(content)
-      setShowOpenDialog(false)
-      console.log(`Arquivo ${fileName}.sythm carregado com sucesso`)
     }
+    setShowOpenDialog(false)
   }
 
-  const confirmUnsavedAction = () => {
+  const handleUnsavedConfirm = (action: 'save' | 'discard') => {
+    if (action === 'save') {
+      setShowSaveDialog(true)
+      setShowUnsavedDialog(false)
+      return
+    }
+
+    // Discard changes
+    setShowUnsavedDialog(false)
+    
     if (pendingAction === 'new') {
       setCode(NEW_COMPOSITION_CODE)
     } else if (pendingAction === 'open') {
-      if (pendingFileData) {
-        setCode(pendingFileData.content)
-        console.log(`Arquivo ${pendingFileData.fileName}.sythm carregado com sucesso`)
-        setPendingFileData(null)
-      } else {
-        setShowOpenDialog(true)
-      }
+      setShowOpenDialog(true)
+    } else if (pendingFileData) {
+      setCode(pendingFileData.content)
+      setPendingFileData(null)
     }
     
     setPendingAction(null)
-    setShowUnsavedDialog(false)
-  }
-
-  const cancelUnsavedAction = () => {
-    setPendingAction(null)
-    setPendingFileData(null)
-    setShowUnsavedDialog(false)
   }
 
   const handleAddComponent = (component: string) => {
-    setCode((prevCode) => prevCode + component)
-  }
-
-  const handleExecute = () => {
-    executeCode(code)
-  }
-
-  const handleBPMChange = (newBpm: number) => {
-    updateBPM(newBpm)
-  }
-
-  const handleInstrumentChange = (instrument: InstrumentType) => {
-    changeInstrument(instrument)
+    const newCode = code + (code.endsWith('\n') || !code ? '' : '\n') + component
+    setCode(newCode)
   }
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground font-mono">
+    <div className="h-screen flex flex-col bg-background">
       <Header
-        isPlaying={audioContext.isPlaying}
-        bpm={audioContext.bpm}
         onNew={handleNew}
         onOpen={handleOpen}
         onSave={() => setShowSaveDialog(true)}
-        onExecute={handleExecute}
-        onStop={stopExecution}
         onHelp={() => setShowHelpDialog(true)}
-        onBPMChange={handleBPMChange}
+        onMultiTrackExample={handleMultiTrackExample}
+        isPlaying={audioContext.isPlaying}
+        bpm={audioContext.bpm}
+        currentInstrument={currentInstrument}
+        onPlay={() => executeCode(code)}
+        onStop={stopExecution}
+        onBpmChange={updateBPM}
+        onInstrumentChange={changeInstrument}
       />
-
-      <div className="flex-1 flex">
-        <CodeEditor 
-          code={code} 
-          onChange={setCode} 
-        />
-        <ComponentsSidebar 
-          onAddComponent={handleAddComponent}
-          currentInstrument={currentInstrument}
-          onInstrumentChange={handleInstrumentChange}
-        />
+      
+      <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex flex-col">
+          <CodeEditor
+            code={code}
+            onChange={setCode}
+            onPlay={() => executeCode(code)}
+            onStop={stopExecution}
+            isPlaying={audioContext.isPlaying}
+          />
+        </div>
+        
+        <div className="w-80 bg-card border-l border-border overflow-y-auto">
+          <div className="p-4 space-y-4">
+            {/* Mixer multitrack */}
+            {isMultiTrackMode && (
+              <TrackMixer
+                multiTrackState={multiTrackState}
+                isPlaying={audioContext.isPlaying}
+                onPlay={() => executeCode(code)}
+                onStop={stopExecution}
+                onTrackMute={muteTrack}
+                onTrackUnmute={unmuteTrack}
+                onTrackSolo={soloTrack}
+                onTrackUnsolo={unsoloTrack}
+                onTrackVolumeChange={setTrackVolume}
+                onReset={() => {
+                  stopExecution()
+                  // Aqui poderia resetar estados das tracks
+                }}
+              />
+            )}
+            
+            {/* Sidebar de componentes */}
+            <ComponentsSidebar
+              onAddComponent={handleAddComponent}
+              currentInstrument={currentInstrument}
+              onInstrumentChange={changeInstrument}
+            />
+          </div>
+        </div>
       </div>
 
+      {/* Dialogs */}
       <SaveDialog
-        open={showSaveDialog}
-        onOpenChange={setShowSaveDialog}
-        onSave={handleSave}
+        isOpen={showSaveDialog}
+        onClose={() => setShowSaveDialog(false)}
+        code={code}
       />
 
       <OpenDialog
-        open={showOpenDialog}
-        onOpenChange={setShowOpenDialog}
-        onLoad={handleLoad}
+        isOpen={showOpenDialog}
+        onClose={() => setShowOpenDialog(false)}
+        onFileLoad={handleFileLoad}
       />
 
       <UnsavedChangesDialog
-        open={showUnsavedDialog}
-        onOpenChange={cancelUnsavedAction}
-        onConfirm={confirmUnsavedAction}
+        isOpen={showUnsavedDialog}
+        onClose={() => setShowUnsavedDialog(false)}
+        onConfirm={handleUnsavedConfirm}
       />
 
-      <HelpDialog open={showHelpDialog} onOpenChange={setShowHelpDialog} />
+      <HelpDialog
+        isOpen={showHelpDialog}
+        onClose={() => setShowHelpDialog(false)}
+      />
     </div>
   )
 }

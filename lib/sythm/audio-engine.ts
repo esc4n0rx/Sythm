@@ -1,5 +1,5 @@
 /**
- * Motor de áudio para execução de música Sythm
+ * Motor de áudio para execução de música Sythm com suporte multitrack
  */
 
 import { getNoteFrequency } from './note-frequencies';
@@ -86,71 +86,51 @@ export class SythmAudioEngine {
   }
 
   /**
-   * Para toda a execução atual
-   */
-  stop(): void {
-    if (this.audioContext) {
-      // Para todos os nós agendados (compatibilidade com código antigo)
-      this.scheduledNodes.forEach(node => {
-        try {
-          if (node instanceof OscillatorNode) {
-            node.stop();
-          }
-        } catch (e) {
-          // Ignora erros se o nó já foi parado
-        }
-      });
-      this.scheduledNodes.clear();
-
-      // Para todos os instrumentos
-      this.instruments.forEach(instrument => {
-        instrument.stop();
-      });
-    }
-  }
-
-  /**
-   * Toca uma nota musical usando o instrumento atual
+   * Toca uma nota usando o sistema de instrumentos
    */
   playNote(note: string, duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
-    if (!this.audioContext) {
-      throw new Error('Audio context not initialized');
-    }
-
-    const instrument = this.getCurrentInstrument();
-    if (instrument) {
-      // Usa o sistema de instrumentos
+    try {
       const frequency = getNoteFrequency(note);
       const actualDuration = this.calculateActualDuration(duration);
-      instrument.playNote(frequency, actualDuration, startTime, 1);
-    } else {
-      // Fallback para o sistema antigo
-      this.playNoteLegacy(note, duration, startTime);
+      const actualStartTime = this.audioContext!.currentTime + startTime;
+
+      const instrument = this.instruments.get(this.currentInstrument);
+      if (instrument) {
+        instrument.playNote(frequency, actualDuration, actualStartTime);
+      } else {
+        // Fallback para sistema legado
+        this.playNoteLegacy(note, duration, startTime);
+      }
+
+    } catch (error) {
+      console.error(`Error playing note ${note}:`, error);
     }
   }
 
   /**
-   * Toca múltiplas notas simultaneamente (acorde) usando o instrumento atual
+   * Toca um acorde usando o sistema de instrumentos
    */
   playChord(notes: string[], duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
-    if (!this.audioContext) {
-      throw new Error('Audio context not initialized');
-    }
-
-    const instrument = this.getCurrentInstrument();
-    if (instrument) {
-      // Usa o sistema de instrumentos
+    try {
       const frequencies = notes.map(note => getNoteFrequency(note));
       const actualDuration = this.calculateActualDuration(duration);
-      instrument.playChord(frequencies, actualDuration, startTime, 1);
-    } else {
-      // Fallback para o sistema antigo
-      this.playChordLegacy(notes, duration, startTime);
+      const actualStartTime = this.audioContext!.currentTime + startTime;
+
+      const instrument = this.instruments.get(this.currentInstrument);
+      if (instrument) {
+        instrument.playChord(frequencies, actualDuration, actualStartTime);
+      } else {
+        // Fallback para sistema legado
+        this.playChordLegacy(notes, duration, startTime);
+      }
+
+    } catch (error) {
+      console.error(`Error playing chord:`, error);
     }
   }
 
   /**
-   * Sistema antigo de tocar notas (mantido para compatibilidade)
+   * Sistema legado de tocar nota (mantido para compatibilidade)
    */
   private playNoteLegacy(note: string, duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
     try {
@@ -220,26 +200,23 @@ export class SythmAudioEngine {
   }
 
   /**
-   * Sistema antigo de tocar acordes (mantido para compatibilidade)
+   * Sistema legado de tocar acordes (mantido para compatibilidade)
    */
   private playChordLegacy(notes: string[], duration: number = this.config.baseNoteDuration, startTime: number = 0): void {
     try {
       const actualDuration = this.calculateActualDuration(duration);
       const actualStartTime = this.audioContext!.currentTime + startTime;
 
-      // Cria um nó de ganho mestre para o acorde
+      // Master gain para o acorde
       const masterGain = this.audioContext!.createGain();
       masterGain.connect(this.audioContext!.destination);
+      masterGain.gain.setValueAtTime(this.config.masterVolume / Math.sqrt(notes.length), actualStartTime);
 
-      // Volume ajustado para evitar distorção com múltiplas notas
-      const chordVolume = this.config.masterVolume / Math.sqrt(notes.length);
-
-      // Cria um oscilador para cada nota do acorde
-      notes.forEach(note => {
+      // Cria um oscilador para cada nota
+      notes.forEach((note, index) => {
         try {
           const frequency = getNoteFrequency(note);
-
-          // Cria oscilador e gain para esta nota
+          
           const oscillator = this.audioContext!.createOscillator();
           const gainNode = this.audioContext!.createGain();
 
@@ -251,43 +228,23 @@ export class SythmAudioEngine {
           oscillator.frequency.setValueAtTime(frequency, actualStartTime);
           oscillator.type = this.config.waveType;
 
-          // Configura envelope ADSR
+          // Envelope ADSR
           const attackTime = 0.01;
           const decayTime = 0.1;
           const sustainLevel = 0.7;
           const releaseTime = 0.1;
 
-          // Attack
           gainNode.gain.setValueAtTime(0, actualStartTime);
-          gainNode.gain.linearRampToValueAtTime(
-            chordVolume, 
-            actualStartTime + attackTime
-          );
+          gainNode.gain.linearRampToValueAtTime(1, actualStartTime + attackTime);
+          gainNode.gain.linearRampToValueAtTime(sustainLevel, actualStartTime + attackTime + decayTime);
 
-          // Decay
-          gainNode.gain.linearRampToValueAtTime(
-            chordVolume * sustainLevel, 
-            actualStartTime + attackTime + decayTime
-          );
-
-          // Sustain
           const releaseStartTime = actualStartTime + actualDuration - releaseTime;
-          gainNode.gain.setValueAtTime(
-            chordVolume * sustainLevel, 
-            releaseStartTime
-          );
+          gainNode.gain.setValueAtTime(sustainLevel, releaseStartTime);
+          gainNode.gain.linearRampToValueAtTime(0, releaseStartTime + releaseTime);
 
-          // Release
-          gainNode.gain.linearRampToValueAtTime(
-            0, 
-            releaseStartTime + releaseTime
-          );
-
-          // Agenda início e fim
           oscillator.start(actualStartTime);
           oscillator.stop(actualStartTime + actualDuration);
 
-          // Registra nós para controle
           this.scheduledNodes.add(oscillator);
           this.scheduledNodes.add(gainNode);
 
@@ -313,6 +270,30 @@ export class SythmAudioEngine {
     } catch (error) {
       console.error(`Error playing chord:`, error);
     }
+  }
+
+  /**
+   * Para todos os sons ativos
+   */
+  stop(): void {
+    this.scheduledNodes.forEach(node => {
+      try {
+        if ('stop' in node && typeof node.stop === 'function') {
+          (node as OscillatorNode).stop();
+        }
+      } catch (error) {
+        // Ignora erros de nós já parados
+      }
+    });
+    
+    this.scheduledNodes.clear();
+
+    // Para instrumentos
+    this.instruments.forEach(instrument => {
+      if (instrument.stop) {
+        instrument.stop();
+      }
+    });
   }
 
   /**
@@ -372,43 +353,42 @@ export class SythmAudioEngine {
   }
 
   /**
-   * Obtém lista de instrumentos disponíveis
-   */
-  getAvailableInstruments() {
-    return InstrumentFactory.getAvailableInstruments();
-  }
 
-/**
-* Obtém estado atual
+Obtém lista de instrumentos disponíveis
 */
-getState() {
- return {
-   isInitialized: !!this.audioContext,
-   isPlaying: this.scheduledNodes.size > 0,
-   timeModifier: this.timeModifier,
-   currentInstrument: this.currentInstrument,
-   availableInstruments: this.getAvailableInstruments(),
-   config: { ...this.config }
- };
-}
-
-  /**
-   * Limpa recursos
-   */
-  dispose(): void {
-    this.stop();
-    
-    // Dispose de todos os instrumentos
-    this.instruments.forEach(instrument => {
-      if (instrument.dispose) {
-        instrument.dispose();
-      }
-    });
-    this.instruments.clear();
-    
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
+getAvailableInstruments() {
+  return InstrumentFactory.getAvailableInstruments();
   }
-}
+  /**
+  
+  Obtém estado atual
+  */
+  getState() {
+  return {
+  context: this.audioContext,
+  isInitialized: !!this.audioContext,
+  isPlaying: this.scheduledNodes.size > 0,
+  timeModifier: this.timeModifier,
+  currentInstrument: this.currentInstrument,
+  availableInstruments: this.getAvailableInstruments(),
+  config: { ...this.config }
+  };
+  }
+  /**
+  
+  Limpa recursos
+  */
+  dispose(): void {
+  this.stop();
+  // Dispose de todos os instrumentos
+  this.instruments.forEach(instrument => {
+    if (instrument.dispose) {
+      instrument.dispose();
+    }
+  });
+  this.instruments.clear();if (this.audioContext) {
+    this.audioContext.close();
+    this.audioContext = null;
+  }
+  }
+  }

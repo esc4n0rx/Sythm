@@ -3,7 +3,7 @@
  */
 
 import { Token, TokenType } from './lexer';
-import { ASTNode, ProgramNode, createNode } from './ast';
+import { ASTNode, ProgramNode, TrackNode, PatternNode, createNode } from './ast';
 
 export class SythmParseError extends Error {
   constructor(
@@ -57,6 +57,16 @@ export class SythmParser {
         return this.parseComment();
       }
       
+      // Pattern definition
+      if (this.check(TokenType.PATTERN)) {
+        return this.parsePattern();
+      }
+      
+      // Track definition
+      if (this.check(TokenType.TRACK)) {
+        return this.parseTrack();
+      }
+      
       // Comandos de tempo
       if (this.check(TokenType.SLOW)) {
         return this.parseSlow();
@@ -95,6 +105,11 @@ export class SythmParser {
       if (this.check(TokenType.NOTE)) {
         return this.parseNote();
       }
+
+      // Referência a pattern
+      if (this.check(TokenType.IDENTIFIER)) {
+        return this.parsePatternReference();
+      }
       
       // Token inesperado
       if (!this.check(TokenType.EOF)) {
@@ -113,6 +128,160 @@ export class SythmParser {
       this.synchronize();
       throw error;
     }
+  }
+
+  /**
+   * Parse de definição de pattern
+   */
+  private parsePattern(): PatternNode {
+    const patternToken = this.advance(); // consome 'pattern'
+    
+    // Espera nome do pattern
+    if (!this.check(TokenType.IDENTIFIER)) {
+      throw new SythmParseError(
+        'Expected pattern name after "pattern"',
+        this.peek().line,
+        this.peek().column,
+        this.peek()
+      );
+    }
+    
+    const nameToken = this.advance();
+    const patternName = nameToken.value;
+    
+    // Espera '='
+    if (!this.check(TokenType.EQUALS)) {
+      throw new SythmParseError(
+        'Expected "=" after pattern name',
+        this.peek().line,
+        this.peek().column,
+        this.peek()
+      );
+    }
+    
+    this.advance(); // consome '='
+    
+    // Espera '{'
+    if (!this.check(TokenType.LBRACE)) {
+      throw new SythmParseError(
+        'Expected "{" after pattern declaration',
+        this.peek().line,
+        this.peek().column,
+        this.peek()
+      );
+    }
+    
+    this.advance(); // consome '{'
+    
+    // Parse do corpo do pattern
+    const body: ASTNode[] = [];
+    
+    while (!this.check(TokenType.RBRACE) && !this.isAtEnd()) {
+      // Pula newlines dentro do pattern
+      if (this.check(TokenType.NEWLINE)) {
+        this.advance();
+        continue;
+      }
+      
+      const stmt = this.parseStatement();
+      if (stmt) {
+        body.push(stmt);
+      }
+    }
+    
+    // Espera '}'
+    if (!this.check(TokenType.RBRACE)) {
+      throw new SythmParseError(
+        'Expected "}" to close pattern',
+        this.peek().line,
+        this.peek().column,
+        this.peek()
+      );
+    }
+    
+    this.advance(); // consome '}'
+    this.consumeNewlineOrEOF();
+    
+    return createNode.pattern(patternName, body, patternToken.line, patternToken.column);
+  }
+
+  /**
+   * Parse de definição de track
+   */
+  private parseTrack(): TrackNode {
+    const trackToken = this.advance(); // consome 'track'
+    
+    // Espera nome da track
+    if (!this.check(TokenType.IDENTIFIER)) {
+      throw new SythmParseError(
+        'Expected track name after "track"',
+        this.peek().line,
+        this.peek().column,
+        this.peek()
+      );
+    }
+    
+    const nameToken = this.advance();
+    const trackName = nameToken.value;
+    
+    // Espera '{'
+    if (!this.check(TokenType.LBRACE)) {
+      throw new SythmParseError(
+        'Expected "{" after track name',
+        this.peek().line,
+        this.peek().column,
+        this.peek()
+      );
+    }
+    
+    this.advance(); // consome '{'
+    
+    // Parse do corpo da track
+    const body: ASTNode[] = [];
+    
+    while (!this.check(TokenType.RBRACE) && !this.isAtEnd()) {
+      // Pula newlines dentro da track
+      if (this.check(TokenType.NEWLINE)) {
+        this.advance();
+        continue;
+      }
+      
+      const stmt = this.parseStatement();
+      if (stmt) {
+        body.push(stmt);
+      }
+    }
+    
+    // Espera '}'
+    if (!this.check(TokenType.RBRACE)) {
+      throw new SythmParseError(
+        'Expected "}" to close track',
+        this.peek().line,
+        this.peek().column,
+        this.peek()
+      );
+    }
+    
+    this.advance(); // consome '}'
+    this.consumeNewlineOrEOF();
+    
+    return createNode.track(trackName, body, trackToken.line, trackToken.column);
+  }
+
+  /**
+   * Parse de referência a pattern
+   */
+  private parsePatternReference(): ASTNode {
+    const identifierToken = this.advance();
+    this.consumeNewlineOrEOF();
+    
+    // Cria um nó especial para referência de pattern
+    return {
+      type: 'PatternReference',
+      name: identifierToken.value,
+      line: identifierToken.line,
+      column: identifierToken.column
+    } as any; // Será tratado pelo interpretador
   }
 
   /**
@@ -325,9 +494,11 @@ export class SythmParser {
         element = this.parseFast();
       } else if (this.check(TokenType.INSTRUMENT)) {
         element = this.parseInstrument();
+      } else if (this.check(TokenType.IDENTIFIER)) {
+        element = this.parsePatternReference();
       } else {
         throw new SythmParseError(
-          'Expected note, chord, rest, slow, fast, or instrument in group',
+          'Expected note, chord, rest, slow, fast, instrument, or pattern in group',
           this.peek().line,
           this.peek().column,
           this.peek()
@@ -496,13 +667,14 @@ export class SythmParser {
     return this.checkAny([
       TokenType.RPAREN,     // Fechamento de grupo
       TokenType.RBRACKET,   // Fechamento de acorde
-      TokenType.RBRACE,     // Fechamento de loop
+      TokenType.RBRACE,     // Fechamento de loop/track/pattern
       TokenType.ASTERISK,   // Multiplicador
       TokenType.NOTE,       // Outra nota na sequência
       TokenType.REST,       // Rest na sequência
       TokenType.LBRACKET,   // Início de acorde
       TokenType.NUMBER,     // Possível duração
-      TokenType.INSTRUMENT  // Instrumento na sequência
+      TokenType.INSTRUMENT, // Instrumento na sequência
+      TokenType.IDENTIFIER  // Referência de pattern
     ]);
   }
 
@@ -541,10 +713,13 @@ export class SythmParser {
            token.type === TokenType.SLOW ||
            token.type === TokenType.FAST ||
            token.type === TokenType.LOOP ||
+           token.type === TokenType.TRACK ||
+           token.type === TokenType.PATTERN ||
            token.type === TokenType.LBRACKET ||
            token.type === TokenType.LPAREN ||
            token.type === TokenType.COMMENT ||
            token.type === TokenType.INSTRUMENT ||
+           token.type === TokenType.IDENTIFIER ||
            token.type === TokenType.EOF;
   }
 
@@ -593,5 +768,5 @@ export class SythmParser {
 
   private checkAny(types: TokenType[]): boolean {
     return types.some(type => this.check(type));
-  }
-}
+    }
+    }
