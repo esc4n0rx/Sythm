@@ -3,7 +3,7 @@
  * Converte AST de uma track em eventos de áudio
  */
 
-import type { ASTNode, NoteNode, ChordNode, RestNode, LoopNode, GroupNode, InstrumentNode } from './ast';
+import type { ASTNode, NoteNode, ChordNode, RestNode, LoopNode, GroupNode, InstrumentNode, PatternReferenceNode } from './ast';
 import type { TrackEvent, TrackState, PatternDefinition } from '@/types/multitrack';
 import type { InstrumentType } from '@/types/instruments';
 
@@ -68,14 +68,18 @@ export class TrackManager {
         events.push(...this.convertGroupNode(node as GroupNode));
         break;
 
-      case 'Pattern':
-        events.push(...this.convertPatternNode(node as any)); // PatternNode será criado
+      case 'PatternReference':
+        events.push(...this.convertPatternReferenceNode(node as PatternReferenceNode));
         break;
 
       // Comandos de velocidade não são eventos, mas afetariam o tempo global
       case 'Slow':
       case 'Fast':
         // Estes seriam tratados pelo interpretador global
+        break;
+
+      case 'Comment':
+        // Comentários não geram eventos
         break;
 
       default:
@@ -188,7 +192,28 @@ export class TrackManager {
   }
 
   /**
-   * Converte pattern nomeado em eventos
+   * Converte referência a pattern em eventos
+   */
+  private convertPatternReferenceNode(node: PatternReferenceNode): TrackEvent[] {
+    const pattern = this.patterns.get(node.name);
+    if (!pattern) {
+      console.warn(`Pattern not found: ${node.name}`);
+      return [];
+    }
+
+    const events: TrackEvent[] = [];
+    
+    for (const bodyNode of pattern.body) {
+      const nodeEvents = this.convertNodeToEvents(bodyNode);
+      events.push(...nodeEvents);
+    }
+
+    return events;
+  }
+
+  /**
+   * MÉTODO LEGADO - Mantido para compatibilidade
+   * Converte pattern nomeado em eventos (usado pelo método antigo)
    */
   private convertPatternNode(node: { type: 'Pattern', name: string }): TrackEvent[] {
     const pattern = this.patterns.get(node.name);

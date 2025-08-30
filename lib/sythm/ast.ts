@@ -1,8 +1,17 @@
 /**
- * Definições do Abstract Syntax Tree (AST) para a linguagem Sythm.
+ * AST (Abstract Syntax Tree) para a linguagem Sythm
  */
 
+/**
+ * Tipos base para o AST
+ */
+export interface BaseNode {
+  line?: number
+  column?: number
+}
+
 export type ASTNode =
+  | ProgramNode
   | NoteNode
   | RestNode
   | SlowNode
@@ -14,17 +23,10 @@ export type ASTNode =
   | InstrumentNode
   | TrackNode
   | PatternNode
-  | PatternReferenceNode // Adicionado
-  | ProgramNode
-
-export interface BaseNode {
-  type: string
-  line?: number
-  column?: number
-}
+  | PatternReferenceNode
 
 /**
- * Nó raiz do programa.
+ * Nó raiz do programa
  */
 export interface ProgramNode extends BaseNode {
   type: 'Program'
@@ -32,38 +34,38 @@ export interface ProgramNode extends BaseNode {
 }
 
 /**
- * Nó para tocar uma nota musical.
+ * Nó de nota musical
  */
 export interface NoteNode extends BaseNode {
   type: 'Note'
-  note: string // ex: "C4", "F#5"
-  duration?: number // duração em beats (opcional, padrão 1)
+  note: string // ex: "C4", "F#5", "Bb3"
+  duration?: number // duração em beats (ex: 1, 0.5, 2)
 }
 
 /**
- * Nó para pausa/silêncio.
+ * Nó de pausa
  */
 export interface RestNode extends BaseNode {
   type: 'Rest'
-  duration?: number // duração em beats (opcional, padrão 1)
+  duration?: number // duração em beats
 }
 
 /**
- * Nó para diminuir o tempo (50% mais lento).
+ * Nó de comando slow
  */
 export interface SlowNode extends BaseNode {
   type: 'Slow'
 }
 
 /**
- * Nó para aumentar o tempo (50% mais rápido).
+ * Nó de comando fast
  */
 export interface FastNode extends BaseNode {
   type: 'Fast'
 }
 
 /**
- * Nó para comentários.
+ * Nó de comentário
  */
 export interface CommentNode extends BaseNode {
   type: 'Comment'
@@ -71,42 +73,42 @@ export interface CommentNode extends BaseNode {
 }
 
 /**
- * Nó para acordes (múltiplas notas simultâneas).
+ * Nó de acorde
  */
 export interface ChordNode extends BaseNode {
   type: 'Chord'
-  notes: string[] // ex: ["C4", "E4", "G4"]
-  duration?: number // duração em beats (opcional, padrão 1)
+  notes: string[] // array de notas, ex: ["C4", "E4", "G4"]
+  duration?: number
 }
 
 /**
- * Nó para loops/repetições.
+ * Nó de loop
  */
 export interface LoopNode extends BaseNode {
   type: 'Loop'
   iterations: number // quantas vezes repetir
-  body: ASTNode[] // comandos a repetir
+  body: ASTNode[] // comandos dentro do loop (pode conter PatternReferenceNode)
 }
 
 /**
- * Nó para agrupamento com multiplicação (C4 D4) * 2.
+ * Nó de grupo com multiplicador
  */
 export interface GroupNode extends BaseNode {
   type: 'Group'
-  body: ASTNode[] // comandos agrupados
-  multiplier?: number // quantas vezes repetir (opcional)
+  body: ASTNode[] // comandos dentro do grupo
+  multiplier?: number // quantas vezes repetir o grupo
 }
 
 /**
- * Nó para seleção de instrumento.
+ * Nó de instrumento
  */
 export interface InstrumentNode extends BaseNode {
   type: 'Instrument'
-  instrument: string // ex: "bass", "kick", "lead"
+  instrument: string // nome do instrumento (ex: "kick", "snare", "lead")
 }
 
 /**
- * Nó para definição de track independente.
+ * Nó de track (multitrack)
  */
 export interface TrackNode extends BaseNode {
   type: 'Track'
@@ -115,7 +117,7 @@ export interface TrackNode extends BaseNode {
 }
 
 /**
- * Nó para definição de pattern reutilizável.
+ * Nó de pattern (template reutilizável)
  */
 export interface PatternNode extends BaseNode {
   type: 'Pattern'
@@ -124,7 +126,7 @@ export interface PatternNode extends BaseNode {
 }
 
 /**
- * Nó para referenciar/chamar um pattern definido.
+ * Nó de referência a pattern
  */
 export interface PatternReferenceNode extends BaseNode {
   type: 'PatternReference'

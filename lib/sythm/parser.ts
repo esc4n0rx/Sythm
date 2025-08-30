@@ -273,15 +273,14 @@ export class SythmParser {
    */
   private parsePatternReference(): ASTNode {
     const identifierToken = this.advance();
-    this.consumeNewlineOrEOF();
     
-    // Cria um nó especial para referência de pattern
-    return {
-      type: 'PatternReference',
-      name: identifierToken.value,
-      line: identifierToken.line,
-      column: identifierToken.column
-    } as any; // Será tratado pelo interpretador
+    // Se não estamos dentro de um grupo, consome newline
+    if (!this.isInsideGroup()) {
+      this.consumeNewlineOrEOF();
+    }
+    
+    // Usa o factory method do createNode para consistência
+    return createNode.patternReference(identifierToken.value, identifierToken.line, identifierToken.column);
   }
 
   /**
@@ -344,7 +343,7 @@ export class SythmParser {
   }
 
   /**
-   * Parse do comando loop
+   * Parse do comando loop - VERSÃO CORRIGIDA
    */
   private parseLoop(): ASTNode {
     const loopToken = this.advance(); // consome 'loop'
@@ -362,48 +361,58 @@ export class SythmParser {
     const iterationsToken = this.advance();
     const iterations = parseInt(iterationsToken.value);
     
-    // Espera '{'
-    if (!this.check(TokenType.LBRACE)) {
-      throw new SythmParseError(
-        'Expected "{" after loop iterations',
-        this.peek().line,
-        this.peek().column,
-        this.peek()
-      );
-    }
-    
-    this.advance(); // consome '{'
-    
-    // Parse do corpo do loop
-    const body: ASTNode[] = [];
-    
-    while (!this.check(TokenType.RBRACE) && !this.isAtEnd()) {
-      // Pula newlines dentro do loop
-      if (this.check(TokenType.NEWLINE)) {
-        this.advance();
-        continue;
+    // Verifica se é um bloco { ... } ou uma referência a pattern
+    if (this.check(TokenType.LBRACE)) {
+      // Sintaxe: loop N { ... }
+      this.advance(); // consome '{'
+      
+      // Parse do corpo do loop
+      const body: ASTNode[] = [];
+      
+      while (!this.check(TokenType.RBRACE) && !this.isAtEnd()) {
+        // Pula newlines dentro do loop
+        if (this.check(TokenType.NEWLINE)) {
+          this.advance();
+          continue;
+        }
+        
+        const stmt = this.parseStatement();
+        if (stmt) {
+          body.push(stmt);
+        }
       }
       
-      const stmt = this.parseStatement();
-      if (stmt) {
-        body.push(stmt);
+      // Espera '}'
+      if (!this.check(TokenType.RBRACE)) {
+        throw new SythmParseError(
+          'Expected "}" to close loop',
+          this.peek().line,
+          this.peek().column,
+          this.peek()
+        );
       }
-    }
-    
-    // Espera '}'
-    if (!this.check(TokenType.RBRACE)) {
+      
+      this.advance(); // consome '}'
+      this.consumeNewlineOrEOF();
+      
+      return createNode.loop(iterations, body, loopToken.line, loopToken.column);
+      
+    } else if (this.check(TokenType.IDENTIFIER)) {
+      // Sintaxe: loop N patternName
+      const patternRef = this.parsePatternReference();
+      
+      // Cria um loop com a referência ao pattern no body
+      return createNode.loop(iterations, [patternRef], loopToken.line, loopToken.column);
+      
+    } else {
+      // Erro: esperava { ou pattern name
       throw new SythmParseError(
-        'Expected "}" to close loop',
+        'Expected "{" or pattern name after loop iterations',
         this.peek().line,
         this.peek().column,
         this.peek()
       );
     }
-    
-    this.advance(); // consome '}'
-    this.consumeNewlineOrEOF();
-    
-    return createNode.loop(iterations, body, loopToken.line, loopToken.column);
   }
 
   /**
@@ -510,15 +519,6 @@ export class SythmParser {
       }
     }
     
-    if (body.length === 0) {
-      throw new SythmParseError(
-        'Group cannot be empty',
-        parenToken.line,
-        parenToken.column,
-        parenToken
-      );
-    }
-    
     // Espera ')'
     if (!this.check(TokenType.RPAREN)) {
       throw new SythmParseError(
@@ -549,12 +549,37 @@ export class SythmParser {
       multiplier = parseInt(multiplierToken.value);
     }
     
-    this.consumeNewlineOrEOF();
+    // Se não estamos dentro de um grupo, consome newline
+    if (!this.isInsideGroup()) {
+      this.consumeNewlineOrEOF();
+    }
+    
     return createNode.group(body, multiplier, parenToken.line, parenToken.column);
   }
 
   /**
-   * Parse de nota dentro de grupo (não consome newline)
+   * Parse de nota musical
+   */
+  private parseNote(): ASTNode {
+    const token = this.advance();
+    let duration: number | undefined;
+    
+    // Verifica se tem duração especificada
+    if (this.check(TokenType.NUMBER)) {
+      const durationToken = this.advance();
+      duration = parseFloat(durationToken.value);
+    }
+    
+    // Se não estamos dentro de um grupo, consome newline
+    if (!this.isInsideGroup()) {
+      this.consumeNewlineOrEOF();
+    }
+    
+    return createNode.note(token.value, duration, token.line, token.column);
+  }
+
+  /**
+   * Parse de nota dentro de um grupo (não consome newline automaticamente)
    */
   private parseNoteInGroup(): ASTNode {
     const token = this.advance();
@@ -570,7 +595,7 @@ export class SythmParser {
   }
 
   /**
-   * Parse de rest dentro de grupo (não consome newline)
+   * Parse de rest dentro de um grupo (não consome newline automaticamente)
    */
   private parseRestInGroup(): ASTNode {
     const token = this.advance();
@@ -586,7 +611,7 @@ export class SythmParser {
   }
 
   /**
-   * Parse de acorde dentro de grupo (não consome newline)
+   * Parse de acorde dentro de um grupo (não consome newline automaticamente)
    */
   private parseChordInGroup(): ASTNode {
     const bracketToken = this.advance(); // consome '['
@@ -636,27 +661,6 @@ export class SythmParser {
     }
     
     return createNode.chord(notes, duration, bracketToken.line, bracketToken.column);
-  }
-
-  /**
-   * Parse de nota musical
-   */
-  private parseNote(): ASTNode {
-    const token = this.advance();
-    let duration: number | undefined;
-    
-    // Verifica se tem duração especificada
-    if (this.check(TokenType.NUMBER)) {
-      const durationToken = this.advance();
-      duration = parseFloat(durationToken.value);
-    }
-    
-    // Se não estamos dentro de um grupo, consome newline
-    if (!this.isInsideGroup()) {
-      this.consumeNewlineOrEOF();
-    }
-    
-    return createNode.note(token.value, duration, token.line, token.column);
   }
 
   /**
@@ -768,5 +772,5 @@ export class SythmParser {
 
   private checkAny(types: TokenType[]): boolean {
     return types.some(type => this.check(type));
-    }
-    }
+  }
+}
