@@ -135,7 +135,7 @@ Sythm/
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/<esc4n0rx>/Sythm.git
+git clone https://github.com/esc4n0rx/Sythm.git
 cd Sythm
 
 # 2. Instale as dependências do monorepo
