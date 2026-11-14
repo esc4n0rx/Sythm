@@ -1,0 +1,33 @@
+{
+  "name": "sythm-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Sythm — COBOL-inspired live coding music language and Xcode-style web IDE",
+  "keywords": [
+    "sythm",
+    "live-coding",
+    "cobol",
+    "web-audio",
+    "synthesizer",
+    "music-dsl",
+    "strudel",
+    "euclidean-rhythms",
+    "dsp",
+    "typescript"
+  ],
+  "scripts": {
+    "build:core": "pnpm --filter @sythm/core build",
+    "dev:backend": "pnpm --filter @sythm/backend dev",
+    "dev:frontend": "pnpm --filter @sythm/frontend dev",
+    "dev": "pnpm --filter @sythm/core build && pnpm --parallel --filter \"@sythm/*\" dev",
+    "build": "pnpm --filter @sythm/core build && pnpm --filter @sythm/backend build && pnpm --filter @sythm/frontend build",
+    "test": "pnpm --filter @sythm/core test",
+    "typecheck": "pnpm -r typecheck",
+    "check": "pnpm -r typecheck && pnpm test && pnpm build"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
