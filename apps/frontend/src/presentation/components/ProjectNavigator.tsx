@@ -10,7 +10,11 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  GripVertical,
   Pencil,
+  Play,
+  Plus,
+  Puzzle,
   RotateCcw,
   Trash2,
   X,
@@ -35,7 +39,95 @@ export interface ProjectNavigatorProps {
   readonly onDeleteFile: (fileId: string) => void;
   readonly onResetFactory: () => void;
   readonly onOpenTutorial: () => void;
+  readonly onPreviewComponent?: (snippet: string) => void;
+  readonly onInsertComponent?: (snippet: string) => void;
 }
+
+interface ReadyComponentItem {
+  readonly id: string;
+  readonly name: string;
+  readonly tag: string;
+  readonly snippet: string;
+}
+
+const SYTHM_READY_COMPONENTS: ReadyComponentItem[] = [
+  {
+    id: 'comp-acid-bass',
+    name: 'Acid Bass 303',
+    tag: 'BASS',
+    snippet: `  TRACK ACID-BASS.
+    WAVE IS ACID-BASS.
+    VOLUME IS 65.
+    FILTER IS LOWPASS 1400 HZ Q 3.
+    PLAY NOTES C2 C2 Eb2 G2 C2 Bb1 C2 F2 FOR 0.5 BEATS.
+  END-TRACK.\n`,
+  },
+  {
+    id: 'comp-sub-808',
+    name: 'Sub-808 Groove',
+    tag: 'BASS',
+    snippet: `  TRACK SUB-808.
+    WAVE IS SUB-808.
+    VOLUME IS 75.
+    PLAY NOTES C1 C1 G1 Eb1 FOR 1 BEAT.
+  END-TRACK.\n`,
+  },
+  {
+    id: 'comp-kick-4x4',
+    name: 'Kick 4x4',
+    tag: 'DRUM',
+    snippet: `  TRACK KICK-4X4.
+    VOLUME IS 85.
+    PATTERN KICK IS "x... x... x... x...".
+  END-TRACK.\n`,
+  },
+  {
+    id: 'comp-trap-hats',
+    name: 'Trap Hi-Hats',
+    tag: 'DRUM',
+    snippet: `  TRACK TRAP-HATS.
+    VOLUME IS 60.
+    PATTERN HIHAT IS "x.xx o.X. x.xx oXXX".
+  END-TRACK.\n`,
+  },
+  {
+    id: 'comp-fm-chords',
+    name: 'FM Keys Chords',
+    tag: 'CHORD',
+    snippet: `  TRACK FM-CHORDS.
+    WAVE IS FM-KEYS.
+    VOLUME IS 55.
+    REVERB IS 30 PERCENT.
+    PLAY CHORDS Cm7 Abmaj7 Fm7 G7 FOR 2 BEATS.
+  END-TRACK.\n`,
+  },
+  {
+    id: 'comp-warm-pad',
+    name: 'Warm Pad',
+    tag: 'PAD',
+    snippet: `  TRACK WARM-PAD.
+    WAVE IS PAD-WARM.
+    VOLUME IS 45.
+    REVERB IS 50 PERCENT.
+    PLAY CHORD Cm9 FOR 4 BEATS.
+  END-TRACK.\n`,
+  },
+  {
+    id: 'comp-euclid-perc',
+    name: 'Euclidean Perc',
+    tag: 'PERC',
+    snippet: `  TRACK EUCLID-PERC.
+    VOLUME IS 70.
+    PLAY EUCLIDEAN PERC 5 IN 16 FOR 0.25 BEATS.
+  END-TRACK.\n`,
+  },
+  {
+    id: 'comp-filter-ramp',
+    name: 'Filter Ramp',
+    tag: 'FX',
+    snippet: `    RAMP FILTER FROM 250 TO 3600 OVER 8 BEATS.\n`,
+  },
+];
 
 type InlinePromptState =
   | { kind: 'new-folder'; value: string }
@@ -59,6 +151,8 @@ export function ProjectNavigator({
   onDeleteFile,
   onResetFactory,
   onOpenTutorial,
+  onPreviewComponent,
+  onInsertComponent,
 }: ProjectNavigatorProps) {
   const [promptState, setPromptState] = useState<InlinePromptState>(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -395,6 +489,68 @@ export function ProjectNavigator({
               />
             </div>
           </button>
+        </div>
+
+        {/* Ready-to-use Drag & Play Components */}
+        <div className="sythm-border border-t pt-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Puzzle className="h-3.5 w-3.5 text-[#64d2ff]" aria-hidden="true" />
+              <span className="text-[11px] font-semibold tracking-wider text-[#aeaeb2] uppercase">
+                Componentes
+              </span>
+            </div>
+            <span className="text-[10px] text-[#8e8e93]">Clique / Arraste</span>
+          </div>
+
+          <ul className="space-y-1.5">
+            {SYTHM_READY_COMPONENTS.map((comp) => (
+              <li
+                key={comp.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/x-sythm-component', comp.snippet);
+                  e.dataTransfer.setData('text/plain', comp.snippet);
+                  e.dataTransfer.effectAllowed = 'copy';
+                }}
+                title="Clique no Play para ouvir ou arraste para o editor de código"
+                className="group flex cursor-grab items-center justify-between gap-1.5 rounded-lg border border-[#3d3f45] bg-[var(--sythm-bg-window)]/80 px-2 py-1.5 transition hover:border-[var(--sythm-accent)]/60 hover:bg-[#2a2b30] active:cursor-grabbing"
+              >
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <GripVertical className="h-3 w-3 shrink-0 text-[#636366]" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <div className="truncate text-[11px] font-medium text-[#f2f2f7]">
+                      {comp.name}
+                    </div>
+                    <div className="font-mono-code text-[9px] text-[#8e8e93]">{comp.tag}</div>
+                  </div>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-1">
+                  {onPreviewComponent && (
+                    <button
+                      type="button"
+                      onClick={() => onPreviewComponent(comp.snippet)}
+                      title={`Tocar preview de ${comp.name}`}
+                      className="flex h-5 w-5 cursor-pointer items-center justify-center rounded bg-[#30d158]/20 text-[#6ee787] transition hover:bg-[#30d158]/35"
+                    >
+                      <Play className="h-2.5 w-2.5 fill-current" />
+                    </button>
+                  )}
+                  {onInsertComponent && (
+                    <button
+                      type="button"
+                      onClick={() => onInsertComponent(comp.snippet)}
+                      title={`Inserir ${comp.name} no código`}
+                      className="flex h-5 w-5 cursor-pointer items-center justify-center rounded bg-[#0a84ff]/20 text-[#70c4ff] transition hover:bg-[#0a84ff]/35"
+                    >
+                      <Plus className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </aside>

@@ -455,4 +455,118 @@ describe('compileSythmCode (Parser + TimelineExecutionPlanner)', () => {
     expect(events[0].durationBeats).toBe(8);
     expect(events[0].durationSec).toBeCloseTo(4, 3);
   });
+
+  it('compiles generative syntax: MAYBE, CHOOSE ONE OF, and HUMANIZE', () => {
+    const code = `
+      CONFIG DIVISION.
+        TEMPO IS 120 BPM.
+        HUMANIZE 12 MS VELOCITY 20 PERCENT.
+
+      PLAY DIVISION.
+        TRACK GEN.
+          MAYBE 50 PERCENT PLAY DRUM KICK FOR 1 BEAT.
+          PLAY CHOOSE ONE OF (C4, E4, G4, B4) FOR 0.5 BEATS.
+          CHOOSE ONE OF (KICK, SNARE, CLAP) FOR 0.5 BEATS.
+          HUMANIZE OFF.
+          PLAY NOTE A4 FOR 1 BEAT.
+        END-TRACK.
+    `;
+    const result = compileSythmCode(code);
+    expect(result.success).toBe(true);
+    const events = result.plan?.events ?? [];
+    expect(events).toHaveLength(4);
+
+    expect(events[0].type).toBe('drum');
+    expect(events[0].probability).toBe(50);
+    expect(events[0].humanize).toEqual({ timingMs: 12, velocityPercent: 20 });
+
+    expect(events[1].type).toBe('note');
+    expect(events[1].noteChoices).toEqual(['C4', 'E4', 'G4', 'B4']);
+    expect(events[1].frequencyChoices).toHaveLength(4);
+    expect(events[1].humanize).toEqual({ timingMs: 12, velocityPercent: 20 });
+
+    expect(events[2].type).toBe('drum');
+    expect(events[2].drumChoices).toEqual(['kick', 'snare', 'clap']);
+
+    expect(events[3].type).toBe('note');
+    expect(events[3].humanize).toBeUndefined();
+  });
+
+  it('compiles RAMP / AUTOMATE across events and TEMPO ramps', () => {
+    const code = `
+      CONFIG DIVISION.
+        TEMPO IS 120 BPM.
+
+      PLAY DIVISION.
+        TRACK FILTER-RAMP.
+          RAMP FILTER FROM 200 TO 1000 OVER 4 BEATS.
+          REPEAT 4 TIMES
+            PLAY NOTE C3 FOR 1 BEAT.
+          END-REPEAT.
+        END-TRACK.
+
+        TRACK TEMPO-RAMP.
+          AUTOMATE TEMPO FROM 100 TO 140 OVER 2 BEATS.
+          PLAY NOTE C4 FOR 1 BEAT.
+          PLAY NOTE D4 FOR 1 BEAT.
+        END-TRACK.
+    `;
+    const result = compileSythmCode(code);
+    expect(result.success).toBe(true);
+
+    const filterEvents = (result.plan?.events ?? []).filter((e) => e.trackName === 'FILTER-RAMP');
+    expect(filterEvents).toHaveLength(4);
+    expect(filterEvents[0].ramps?.[0]).toMatchObject({ param: 'filter', fromValue: 200, toValue: 400 });
+    expect(filterEvents[1].ramps?.[0]).toMatchObject({ param: 'filter', fromValue: 400, toValue: 600 });
+    expect(filterEvents[3].ramps?.[0]).toMatchObject({ param: 'filter', fromValue: 800, toValue: 1000 });
+    expect(filterEvents[0].effects.filter.mode).toBe('lowpass');
+
+    const tempoEvents = (result.plan?.events ?? []).filter((e) => e.trackName === 'TEMPO-RAMP');
+    expect(tempoEvents[0].bpm).toBeCloseTo(100, 1);
+    expect(tempoEvents[1].bpm).toBeCloseTo(120, 1);
+  });
+
+  it('compiles inline PATTERN step sequencer and SWING groove', () => {
+    const code = `
+      CONFIG DIVISION.
+        TEMPO IS 120 BPM.
+        SWING IS 50 PERCENT.
+
+      PLAY DIVISION.
+        TRACK DRUMS.
+          PATTERN KICK IS "x.oxX.-." STEP 0.25 BEATS.
+        END-TRACK.
+
+        TRACK STRAIGHT.
+          SWING OFF.
+          PATTERN HIHAT IS "x.x." FOR 1 BEAT.
+        END-TRACK.
+    `;
+    const result = compileSythmCode(code);
+    expect(result.success).toBe(true);
+
+    const drumEvents = (result.plan?.events ?? []).filter((e) => e.trackName === 'DRUMS');
+    expect(drumEvents).toHaveLength(8);
+    expect(drumEvents.map((e) => e.type)).toEqual([
+      'drum',
+      'rest',
+      'drum',
+      'drum',
+      'drum',
+      'rest',
+      'rest',
+      'rest',
+    ]);
+    // Ghost 'o' < normal 'x' < accent 'X'
+    expect(drumEvents[2].volume).toBeLessThan(drumEvents[0].volume);
+    expect(drumEvents[4].volume).toBeGreaterThan(drumEvents[0].volume);
+    // Off-beat 16th at beat 0.75 (index 3) is swung; beat 0.0 (index 0) is straight
+    expect(drumEvents[0].startTimeSec).toBeCloseTo(0, 4);
+    expect(drumEvents[3].startTimeSec).toBeGreaterThan(0.375);
+
+    const straightEvents = (result.plan?.events ?? []).filter((e) => e.trackName === 'STRAIGHT');
+    expect(straightEvents).toHaveLength(4);
+    // At 120 BPM (0.5s/beat), 0.25 beat = 0.125s, no swing
+    expect(straightEvents[1].startTimeSec).toBeCloseTo(0.125, 4);
+  });
 });

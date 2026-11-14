@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ExecutionPlan, ScheduledAudioEvent, VisualizerMode } from '@sythm/core';
-import { Activity, Pause, Play } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import type { ExecutionPlan, VisualizerMode } from '@sythm/core';
+import { Activity, Music, Pause, Play } from 'lucide-react';
 import type { WebAudioEngine } from '../../infrastructure/audio/WebAudioEngine';
 
 export interface AudioVisualizerBarProps {
@@ -9,29 +9,15 @@ export interface AudioVisualizerBarProps {
   readonly isPlaying: boolean;
   readonly modeOverride: VisualizerMode | null;
   readonly onModeChange: (mode: VisualizerMode) => void;
+  readonly onOpenPianoRoll?: () => void;
 }
 
 const MODE_OPTIONS: { id: VisualizerMode; label: string }[] = [
   { id: 'all', label: 'ALL' },
   { id: 'scope', label: 'SCOPE' },
   { id: 'spectrum', label: 'SPECTRUM' },
-  { id: 'pianoroll', label: 'ROLL' },
   { id: 'off', label: 'OFF' },
 ];
-
-const TRACK_COLORS = ['#0a84ff', '#30d158', '#ff9f0a', '#b281eb', '#64d2ff', '#ff6482'];
-
-function freqToNormalizedY(freqHz: number): number {
-  const safeFreq = Math.max(40, Math.min(2000, freqHz));
-  const minLog = Math.log2(45);
-  const maxLog = Math.log2(1600);
-  const norm = (Math.log2(safeFreq) - minLog) / (maxLog - minLog);
-  return 1 - Math.max(0.06, Math.min(0.94, norm));
-}
-
-function getTrackColor(trackIndex: number): string {
-  return TRACK_COLORS[trackIndex % TRACK_COLORS.length];
-}
 
 export function AudioVisualizerBar({
   audioEngine,
@@ -39,8 +25,10 @@ export function AudioVisualizerBar({
   isPlaying,
   modeOverride,
   onModeChange,
+  onOpenPianoRoll,
 }: AudioVisualizerBarProps) {
-  const activeMode: VisualizerMode = modeOverride ?? plan?.visualizerMode ?? 'all';
+  const rawMode: VisualizerMode = modeOverride ?? plan?.visualizerMode ?? 'all';
+  const activeMode: VisualizerMode = rawMode === 'pianoroll' ? 'all' : rawMode;
   const [userPaused, setUserPaused] = useState(false);
   const [isContentVisible, setIsContentVisible] = useState(true);
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -49,13 +37,6 @@ export function AudioVisualizerBar({
   const containerRef = useRef<HTMLDivElement>(null);
   const scopeCanvasRef = useRef<HTMLCanvasElement>(null);
   const spectrumCanvasRef = useRef<HTMLCanvasElement>(null);
-  const rollCanvasRef = useRef<HTMLCanvasElement>(null);
-
-  const trackIndexMap = useMemo(() => {
-    const map = new Map<string, number>();
-    plan?.tracks.forEach((t, idx) => map.set(t.name, idx));
-    return map;
-  }, [plan]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
@@ -105,7 +86,6 @@ export function AudioVisualizerBar({
 
     const showScope = activeMode === 'all' || activeMode === 'scope';
     const showSpectrum = activeMode === 'all' || activeMode === 'spectrum';
-    const showRoll = activeMode === 'all' || activeMode === 'pianoroll';
 
     const timeData = new Uint8Array(new ArrayBuffer(2048));
     const freqData = new Uint8Array(new ArrayBuffer(1024));
@@ -193,66 +173,6 @@ export function AudioVisualizerBar({
       }
     };
 
-    const drawPianoRoll = (currentBeat: number, totalBeats: number): void => {
-      const canvas = rollCanvasRef.current;
-      if (!canvas || !showRoll) return;
-      resizeCanvas(canvas);
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.clearRect(0, 0, w, h);
-
-      const safeTotalBeats = Math.max(1, totalBeats || 4);
-
-      // Vertical beat grid lines
-      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-      ctx.lineWidth = 1;
-      const beatLines = Math.min(32, Math.ceil(safeTotalBeats));
-      for (let b = 1; b < beatLines; b += 1) {
-        const gx = (b / safeTotalBeats) * w;
-        ctx.beginPath();
-        ctx.moveTo(gx, 0);
-        ctx.lineTo(gx, h);
-        ctx.stroke();
-      }
-
-      const events: ScheduledAudioEvent[] = plan?.events ?? [];
-      for (const evt of events) {
-        if (evt.type === 'rest') continue;
-        const x = (evt.startBeat / safeTotalBeats) * w;
-        const ew = Math.max(3, (evt.durationBeats / safeTotalBeats) * w - 1);
-        const trackIdx = trackIndexMap.get(evt.trackName) ?? 0;
-        const color = getTrackColor(trackIdx);
-        const isCurrent = currentBeat >= evt.startBeat && currentBeat < evt.startBeat + evt.durationBeats;
-
-        ctx.fillStyle = isCurrent ? '#ffffff' : color;
-        ctx.globalAlpha = isCurrent ? 0.95 : 0.72;
-
-        if (evt.type === 'drum') {
-          const drumY = h - 9;
-          ctx.fillRect(x, drumY, ew, 5);
-        } else {
-          for (const freq of evt.frequencies) {
-            const y = freqToNormalizedY(freq) * (h - 14) + 3;
-            ctx.fillRect(x, y, ew, 4);
-          }
-        }
-      }
-      ctx.globalAlpha = 1;
-
-      if (isPlaying && safeTotalBeats > 0) {
-        const playheadX = Math.max(0, Math.min(w - 1, (currentBeat / safeTotalBeats) * w));
-        ctx.strokeStyle = '#64d2ff';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(playheadX, 0);
-        ctx.lineTo(playheadX, h);
-        ctx.stroke();
-      }
-    };
-
     const renderFrame = (): void => {
       const progress = audioEngine?.getProgress() ?? {
         currentBeat: 0,
@@ -265,7 +185,6 @@ export function AudioVisualizerBar({
       const hasFreq = Boolean(isPlaying && audioEngine?.getFrequencyData(freqData));
       drawScope(hasTime);
       drawSpectrum(hasFreq);
-      drawPianoRoll(progress.currentBeat, plan?.totalBeats ?? progress.totalBeats);
       setLiveBeat(progress.currentBeat);
     };
 
@@ -279,7 +198,6 @@ export function AudioVisualizerBar({
       if (ro) {
         if (scopeCanvasRef.current) ro.observe(scopeCanvasRef.current);
         if (spectrumCanvasRef.current) ro.observe(spectrumCanvasRef.current);
-        if (rollCanvasRef.current) ro.observe(rollCanvasRef.current);
       }
       return () => ro?.disconnect();
     }
@@ -300,11 +218,10 @@ export function AudioVisualizerBar({
     return () => {
       window.cancelAnimationFrame(rafId);
     };
-  }, [activeMode, audioEngine, isContentVisible, isPlaying, plan, reducedMotion, trackIndexMap, userPaused]);
+  }, [activeMode, audioEngine, isContentVisible, isPlaying, plan, reducedMotion, userPaused]);
 
   const showScope = activeMode === 'all' || activeMode === 'scope';
   const showSpectrum = activeMode === 'all' || activeMode === 'spectrum';
-  const showRoll = activeMode === 'all' || activeMode === 'pianoroll';
 
   return (
     <div
@@ -329,6 +246,18 @@ export function AudioVisualizerBar({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {onOpenPianoRoll && (
+            <button
+              type="button"
+              onClick={onOpenPianoRoll}
+              title="Abrir Piano Roll Interativo para tocar e inserir notas"
+              className="inline-flex cursor-pointer items-center gap-1 rounded border border-[#64d2ff]/40 bg-[#0a84ff]/15 px-2 py-0.5 text-[10px] font-semibold text-[#64d2ff] transition hover:bg-[#0a84ff]/30"
+            >
+              <Music size={10} />
+              <span>Piano Roll</span>
+            </button>
+          )}
+
           {activeMode !== 'off' && (
             <button
               type="button"
@@ -371,7 +300,7 @@ export function AudioVisualizerBar({
       {activeMode !== 'off' && (
         <div
           className={`h-[72px] px-2.5 py-1.5 grid gap-2 ${
-            activeMode === 'all' ? 'grid-cols-1 md:grid-cols-3' : 'grid-cols-1'
+            activeMode === 'all' ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'
           }`}
         >
           {showScope && (
@@ -389,15 +318,6 @@ export function AudioVisualizerBar({
                 FFT Spectrum
               </span>
               <canvas ref={spectrumCanvasRef} className="w-full h-full block" />
-            </div>
-          )}
-
-          {showRoll && (
-            <div className="relative rounded bg-[#101012] border border-white/[0.06] overflow-hidden">
-              <span className="absolute top-1 left-1.5 text-[9px] font-mono uppercase tracking-wider text-[var(--sythm-text-muted)] pointer-events-none">
-                Piano Roll &amp; Beat Grid
-              </span>
-              <canvas ref={rollCanvasRef} className="w-full h-full block" />
             </div>
           )}
         </div>

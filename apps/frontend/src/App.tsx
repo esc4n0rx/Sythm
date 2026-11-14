@@ -12,6 +12,15 @@ import {
 } from '@sythm/core';
 import { checkBackendHealth, compileWithBackendOrFallback } from './infrastructure/api/CompilerClient';
 import {
+  type AuthUser,
+  fetchCloudWorkspace,
+  fetchCurrentUser,
+  getStoredUser,
+  saveCloudWorkspace,
+} from './infrastructure/api/AuthClient';
+import { AuthProfileModal } from './presentation/components/AuthProfileModal';
+import { PianoRollModal } from './presentation/components/PianoRollModal';
+import {
   type AudioSampleItem,
   buildSampleBufferMap,
   createDemoBreakbeatSample,
@@ -68,6 +77,9 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [isAudioImportOpen, setIsAudioImportOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isPianoRollOpen, setIsPianoRollOpen] = useState(false);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => getStoredUser());
   const [samples, setSamples] = useState<AudioSampleItem[]>([]);
 
   const sampleBufferMap = useMemo(() => buildSampleBufferMap(samples), [samples]);
@@ -86,8 +98,40 @@ export function App() {
   });
 
   useEffect(() => {
-    saveWorkspaceState(workspace);
-  }, [workspace]);
+    if (!authUser) {
+      saveWorkspaceState(workspace);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void saveCloudWorkspace(workspace).catch(() => {
+        // Fallback cache in localStorage if offline
+        saveWorkspaceState(workspace);
+      });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [workspace, authUser]);
+
+  // Load cloud workspace on mount if already authenticated
+  useEffect(() => {
+    if (!authUser) return;
+    void fetchCurrentUser().then((verified) => {
+      if (!verified) {
+        setAuthUser(null);
+        return;
+      }
+      setAuthUser(verified);
+      void fetchCloudWorkspace()
+        .then((cloudWs) => {
+          if (cloudWs && Array.isArray(cloudWs.files) && cloudWs.files.length > 0) {
+            setWorkspace(cloudWs);
+          } else {
+            void saveCloudWorkspace(workspace);
+          }
+        })
+        .catch(() => undefined);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const activeFile = useMemo(
     () =>
@@ -194,6 +238,34 @@ export function App() {
   const logSeqRef = useRef<number>(1);
   const codeRef = useRef<string>(code);
   codeRef.current = code;
+  const lastLiveAudioCodeRef = useRef<string>('');
+  const editorCursorRef = useRef<number>(0);
+
+  const [isRecordingAutomation, setIsRecordingAutomation] = useState(false);
+  const [recordedKeyframesCount, setRecordedKeyframesCount] = useState(0);
+  const recordedAutomationRef = useRef<
+    Array<{ control: ControlDescriptor; beat: number; value: number }>
+  >([]);
+
+  // Auto Quantized Hot-Swap while playing in LOOP mode
+  useEffect(() => {
+    if (!isPlaying || !loopEnabled) return;
+    if (!livePreview.success || !livePreview.plan) return;
+    if (code === lastLiveAudioCodeRef.current) return;
+
+    const timer = window.setTimeout(() => {
+      const engine = audioEngineRef.current;
+      if (!engine || !engine.isPlaying() || !livePreview.plan) return;
+      lastLiveAudioCodeRef.current = code;
+      setPlan(livePreview.plan);
+      setDiagnostics([]);
+      setBpm(livePreview.plan.initialBpm);
+      setWaveform(livePreview.plan.initialWaveform);
+      engine.updatePlan(livePreview.plan);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [code, isPlaying, loopEnabled, livePreview]);
 
   useEffect(() => {
     saveSettings(settings);
@@ -340,12 +412,14 @@ export function App() {
       if (!engine) return;
 
       if (engine.isPlaying() && loopEnabled) {
+        lastLiveAudioCodeRef.current = targetCode;
         engine.updatePlan(compiledPlan);
         setStatus('looping');
-        appendConsole('info', 'Live Reload: novo plano aplicado ao próximo ciclo do Loop.');
+        appendConsole('info', 'Live Reload: novo plano agendado para o próximo compasso.');
         return;
       }
 
+      lastLiveAudioCodeRef.current = targetCode;
       setIsPlaying(true);
       setStatus(loopEnabled ? 'looping' : 'playing');
       setActiveEventsMap(new Map());
@@ -354,6 +428,9 @@ export function App() {
         loop: loopEnabled,
         mutedTracks,
         soloedTracks,
+        onHotSwap: () => {
+          appendConsole('info', 'Live Hot-Swap aplicado no compasso.');
+        },
         onCycleStart: (cycle) => {
           setActiveEventsMap(new Map());
           if (cycle > 1) {
@@ -679,8 +756,167 @@ export function App() {
           audioEngineRef.current?.updatePlan(updated.plan);
         }
       }
+
+      if (isRecordingAutomation) {
+        const currentBeat = audioEngineRef.current?.getProgress().currentBeat ?? 0;
+        recordedAutomationRef.current.push({
+          control,
+          beat: currentBeat,
+          value: newValue,
+        });
+        setRecordedKeyframesCount(recordedAutomationRef.current.length);
+      }
     },
-    [setCode],
+    [isRecordingAutomation, setCode],
+  );
+
+  const handleInsertSnippetAtCursor = useCallback(
+    (snippet: string) => {
+      const current = codeRef.current;
+      const pos = Math.max(0, Math.min(current.length, editorCursorRef.current || current.length));
+      const needsNewlineBefore = pos > 0 && current[pos - 1] !== '\n';
+      const insertion = `${needsNewlineBefore ? '\n' : ''}${snippet}`;
+      const nextCode = `${current.slice(0, pos)}${insertion}${current.slice(pos)}`;
+      editorCursorRef.current = pos + insertion.length;
+      setCode(nextCode);
+      appendConsole('info', `Piano Roll inseriu: ${snippet.trim()}`);
+    },
+    [appendConsole, setCode],
+  );
+
+  const handleToggleRecordAutomation = useCallback(() => {
+    if (!isRecordingAutomation) {
+      recordedAutomationRef.current = [];
+      setRecordedKeyframesCount(0);
+      setIsRecordingAutomation(true);
+      appendConsole('info', 'REC Automação iniciado: mova os sliders para gravar keyframes.');
+      return;
+    }
+
+    setIsRecordingAutomation(false);
+    const entries = recordedAutomationRef.current;
+    recordedAutomationRef.current = [];
+    setRecordedKeyframesCount(0);
+
+    if (entries.length < 2) {
+      appendConsole('info', 'REC Automação parado (nenhum movimento suficiente gravado).');
+      return;
+    }
+
+    const PARAM_TO_RAMP: Partial<Record<string, string>> = {
+      filterFrequencyHz: 'FILTER',
+      volume: 'VOLUME',
+      pan: 'PAN',
+      reverbMix: 'REVERB',
+      delayMix: 'DELAY',
+      tempo: 'TEMPO',
+    };
+
+    const byControl = new Map<string, typeof entries>();
+    for (const entry of entries) {
+      const list = byControl.get(entry.control.name) ?? [];
+      list.push(entry);
+      byControl.set(entry.control.name, list);
+    }
+
+    let updatedCode = codeRef.current;
+    const generatedRamps: string[] = [];
+
+    for (const [, list] of byControl.entries()) {
+      if (list.length < 2) continue;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (Math.abs(last.value - first.value) < 0.01) continue;
+
+      const binding = first.control.bindings[0];
+      if (!binding) continue;
+      const rampParam = PARAM_TO_RAMP[binding.param];
+      if (!rampParam) continue;
+
+      const spanBeats = Math.max(1, Math.round((Math.abs(last.beat - first.beat) || 4) * 2) / 2);
+      const fromVal = Math.round(first.value * 100) / 100;
+      const toVal = Math.round(last.value * 100) / 100;
+      const rampLine = `    RAMP ${rampParam} FROM ${fromVal} TO ${toVal} OVER ${spanBeats} BEATS.`;
+
+      const trackRegex = new RegExp(`(TRACK\\s+${binding.trackName}\\s*\\.)`, 'i');
+      if (trackRegex.test(updatedCode)) {
+        updatedCode = updatedCode.replace(trackRegex, `$1\n${rampLine}`);
+        generatedRamps.push(`[${binding.trackName}] ${rampLine.trim()}`);
+      } else {
+        updatedCode = `${updatedCode.trimEnd()}\n${rampLine.trim()}\n`;
+        generatedRamps.push(rampLine.trim());
+      }
+    }
+
+    if (generatedRamps.length > 0) {
+      setCode(updatedCode);
+      appendConsole('info', `Automação gravada e injetada: ${generatedRamps.join(' | ')}`);
+    } else {
+      appendConsole('info', 'REC Automação finalizado (sem variação de parâmetro vinculada).');
+    }
+  }, [appendConsole, isRecordingAutomation, setCode]);
+
+  const handlePreviewSnippet = useCallback(
+    async (snippet: string) => {
+      const engine = audioEngineRef.current;
+      if (!engine) return;
+      const hasPlayDiv = /\bPLAY\s+DIVISION\b/i.test(snippet);
+      const wrapped = hasPlayDiv
+        ? snippet
+        : `CONFIG DIVISION.\n  TEMPO IS 120 BPM.\nPLAY DIVISION.\n${snippet}`;
+      const compiled = compileSythmCode(wrapped);
+      if (!compiled.success || !compiled.plan || compiled.plan.events.length === 0) {
+        appendConsole('error', 'Não foi possível gerar preview para este componente.');
+        return;
+      }
+      setIsPlaying(true);
+      setStatus('playing');
+      await engine.start(compiled.plan, {
+        loop: false,
+        onComplete: () => {
+          setIsPlaying(false);
+          setStatus('ready');
+          setActiveEventsMap(new Map());
+        },
+      });
+    },
+    [appendConsole],
+  );
+
+  const handleAuthenticated = useCallback(
+    (user: AuthUser) => {
+      setAuthUser(user);
+      appendConsole('info', `Logado como @${user.username}. Sincronizando projetos...`);
+      void fetchCloudWorkspace()
+        .then((cloudWs) => {
+          if (cloudWs && Array.isArray(cloudWs.files) && cloudWs.files.length > 0) {
+            setWorkspace(cloudWs);
+            appendConsole('info', 'Projetos carregados da sua conta.');
+          } else {
+            void saveCloudWorkspace(workspace);
+            appendConsole('info', 'Workspace atual salvo na sua nova conta.');
+          }
+        })
+        .catch(() => undefined);
+    },
+    [appendConsole, workspace],
+  );
+
+  const handleLogout = useCallback(() => {
+    setAuthUser(null);
+    setWorkspace(loadWorkspaceState());
+    appendConsole('info', 'Logout realizado. Projetos voltaram ao armazenamento local.');
+  }, [appendConsole]);
+
+  const handleOpenSharedCode = useCallback(
+    (title: string, sharedCode: string, fromUsername: string) => {
+      setWorkspace((prev) => {
+        const res = importSharedCodeIntoWorkspace(prev, sharedCode);
+        return res.state;
+      });
+      appendConsole('info', `Código "${title}" de @${fromUsername} aberto no editor.`);
+    },
+    [appendConsole],
   );
 
   const visualizerPlan =
@@ -720,6 +956,8 @@ export function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenAudioImport={() => setIsAudioImportOpen(true)}
         samplesCount={samples.length}
+        authUser={authUser}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -738,6 +976,8 @@ export function App() {
           onDeleteFile={handleDeleteFile}
           onResetFactory={handleResetFactory}
           onOpenTutorial={() => setIsTutorialOpen(true)}
+          onPreviewComponent={(snippet) => void handlePreviewSnippet(snippet)}
+          onInsertComponent={handleInsertSnippetAtCursor}
         />
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -748,6 +988,9 @@ export function App() {
             activeTracks={activeTracks}
             mutedTracks={mutedTracks}
             soloedTracks={soloedTracks}
+            isRecordingAutomation={isRecordingAutomation}
+            recordedKeyframesCount={recordedKeyframesCount}
+            onToggleRecordAutomation={handleToggleRecordAutomation}
             onToggleMute={handleToggleMute}
             onToggleSolo={handleToggleSolo}
             onControlChange={handleControlChange}
@@ -759,6 +1002,7 @@ export function App() {
             isPlaying={isPlaying}
             modeOverride={visualizerModeOverride}
             onModeChange={setVisualizerModeOverride}
+            onOpenPianoRoll={() => setIsPianoRollOpen(true)}
           />
 
           <CodeEditor
@@ -768,12 +1012,17 @@ export function App() {
             diagnostics={diagnostics}
             controls={activeControls}
             controlValues={controlValues}
+            definedSections={visualizerPlan?.definedSections}
+            sampleNames={samples.map((s) => s.name)}
             fontSize={settings.editorFontSize}
             showLineNumbers={settings.showLineNumbers}
             enableAutocomplete={settings.enableAutocomplete}
             showInlineSliders={settings.showInlineSliders}
             onChange={setCode}
             onControlChange={handleControlChange}
+            onCursorChange={(offset) => {
+              editorCursorRef.current = offset;
+            }}
             onRunShortcut={() => void runCompile(true)}
           />
 
@@ -813,6 +1062,27 @@ export function App() {
         onInsertSampleCommand={handleInsertSampleCommand}
         onLoadGeneratedProgram={handleLoadAudioProgram}
         onClose={() => setIsAudioImportOpen(false)}
+      />
+
+      <AuthProfileModal
+        isOpen={isAuthModalOpen}
+        user={authUser}
+        currentTitle={activeTitle}
+        currentCode={code}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthenticated={handleAuthenticated}
+        onLogout={handleLogout}
+        onOpenSharedCode={handleOpenSharedCode}
+        onPreviewCode={(sharedCode) => void handlePreviewSnippet(sharedCode)}
+      />
+
+      <PianoRollModal
+        isOpen={isPianoRollOpen}
+        audioEngine={audioEngine}
+        plan={visualizerPlan}
+        isPlaying={isPlaying}
+        onInsertSnippet={handleInsertSnippetAtCursor}
+        onClose={() => setIsPianoRollOpen(false)}
       />
     </div>
   );

@@ -6,15 +6,18 @@ import {
   Download,
   FileAudio,
   Hammer,
+  LogIn,
   Play,
   Radio,
   Repeat,
   Settings,
   Share2,
   Square,
+  User,
   Waves,
 } from 'lucide-react';
 import type { ScheduledAudioEvent, WaveformType } from '@sythm/core';
+import type { AuthUser } from '../../infrastructure/api/AuthClient';
 
 export type IdeStatus = 'ready' | 'playing' | 'looping' | 'error';
 
@@ -41,6 +44,8 @@ interface XcodeToolbarProps {
   onOpenSettings?: () => void;
   onOpenAudioImport?: () => void;
   samplesCount?: number;
+  authUser?: AuthUser | null;
+  onOpenAuth?: () => void;
 }
 
 export function XcodeToolbar({
@@ -66,6 +71,8 @@ export function XcodeToolbar({
   onOpenSettings,
   onOpenAudioImport,
   samplesCount = 0,
+  authUser,
+  onOpenAuth,
 }: XcodeToolbarProps) {
   const statusLabel =
     status === 'error'
@@ -253,21 +260,34 @@ export function XcodeToolbar({
             <span>{shareCopied ? 'Copied!' : 'Share'}</span>
           </button>
         )}
-        <span
-          className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-medium ${
-            backendConnected
-              ? 'border-[#2f6f44] bg-[#1b2e22] text-[#7ae582]'
-              : 'border-[#5a4a2a] bg-[#2a2418] text-[#ffd60a]'
-          }`}
-        >
-          <span
-            className={`h-2 w-2 rounded-full ${
-              backendConnected ? 'bg-[#30d158]' : 'bg-[#ffd60a]'
+        {onOpenAuth && (
+          <button
+            type="button"
+            onClick={onOpenAuth}
+            title={
+              authUser
+                ? `Logado como @${authUser.username} · Abrir Perfil e Amigos`
+                : 'Entrar ou Registrar conta Sythm'
+            }
+            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition focus-visible:outline-2 focus-visible:outline-[var(--sythm-accent)] ${
+              authUser
+                ? 'border-[#0a84ff]/50 bg-[#0a84ff]/15 text-[#70c4ff] hover:bg-[#0a84ff]/25'
+                : 'border-[#4a4d55] bg-[#35373d] text-[#f2f2f7] hover:border-[#0a84ff] hover:bg-[#41434a]'
             }`}
-            aria-hidden="true"
-          />
-          <span>{backendConnected ? 'API Connected' : 'Local Engine'}</span>
-        </span>
+          >
+            {authUser ? (
+              <>
+                <User className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="max-w-[110px] truncate">@{authUser.username}</span>
+              </>
+            ) : (
+              <>
+                <LogIn className="h-3.5 w-3.5 text-[#64d2ff]" aria-hidden="true" />
+                <span>Login / Registro</span>
+              </>
+            )}
+          </button>
+        )}
 
         {onOpenSettings && (
           <button

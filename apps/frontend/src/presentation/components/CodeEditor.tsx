@@ -1,4 +1,4 @@
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Sparkles, Wrench } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CompilationDiagnostic, ControlDescriptor } from '@sythm/core';
 import { ControlSlider } from './ControlSlider';
@@ -7,7 +7,10 @@ import {
   type AutocompleteKind,
   type AutocompleteResult,
   type HighlightTokenKind,
+  type HoverDoc,
   getAutocompleteSuggestions,
+  getHoverDoc,
+  getQuickFixForDiagnostic,
   tokenizeLineForHighlight,
 } from './sythmEditorLanguage';
 
@@ -18,12 +21,15 @@ interface CodeEditorProps {
   diagnostics: CompilationDiagnostic[];
   controls: ControlDescriptor[];
   controlValues: Readonly<Record<string, number>>;
+  definedSections?: readonly string[];
+  sampleNames?: readonly string[];
   fontSize?: number;
   showLineNumbers?: boolean;
   enableAutocomplete?: boolean;
   showInlineSliders?: boolean;
   onChange: (newCode: string) => void;
   onControlChange: (control: ControlDescriptor, newValue: number) => void;
+  onCursorChange?: (offset: number) => void;
   onRunShortcut: () => void;
 }
 
@@ -57,12 +63,15 @@ export function CodeEditor({
   diagnostics,
   controls,
   controlValues,
+  definedSections,
+  sampleNames,
   fontSize = 13,
   showLineNumbers = true,
   enableAutocomplete = true,
   showInlineSliders = true,
   onChange,
   onControlChange,
+  onCursorChange,
   onRunShortcut,
 }: CodeEditorProps) {
   const lineHeightPx = Math.round(fontSize * 1.85);
@@ -75,6 +84,8 @@ export function CodeEditor({
   const [autocomplete, setAutocomplete] = useState<AutocompleteResult | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [scrollPos, setScrollPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [followPlayhead, setFollowPlayhead] = useState<boolean>(true);
+  const [hoverDoc, setHoverDoc] = useState<{ doc: HoverDoc; top: number; left: number } | null>(null);
 
   const lines = useMemo(() => code.split('\n'), [code]);
 
@@ -118,7 +129,44 @@ export function CodeEditor({
   useEffect(() => {
     setAutocomplete(null);
     setSelectedIndex(0);
+    setHoverDoc(null);
   }, [filename]);
+
+  // Playhead -> Editor auto-scroll synchronization
+  useEffect(() => {
+    if (!followPlayhead || activeLines.size === 0 || !textareaRef.current) return;
+    const firstActiveLine = Math.min(...Array.from(activeLines));
+    const ta = textareaRef.current;
+    const targetTop = Math.max(0, (firstActiveLine - 1) * lineHeightPx + 12);
+    const viewTop = ta.scrollTop;
+    const viewBottom = viewTop + ta.clientHeight - lineHeightPx * 2;
+    if (targetTop < viewTop + lineHeightPx || targetTop > viewBottom) {
+      ta.scrollTo({
+        top: Math.max(0, targetTop - ta.clientHeight * 0.35),
+        behavior: 'smooth',
+      });
+    }
+  }, [activeLines, followPlayhead, lineHeightPx]);
+
+  const quickFixItem = useMemo(() => {
+    for (const diag of diagnostics) {
+      if (diag.severity !== 'error') continue;
+      const lineIdx = diag.line - 1;
+      if (lineIdx < 0 || lineIdx >= lines.length) continue;
+      const fix = getQuickFixForDiagnostic(diag, lines[lineIdx]);
+      if (fix) {
+        return { diag, fix };
+      }
+    }
+    return null;
+  }, [diagnostics, lines]);
+
+  const applyQuickFix = () => {
+    if (!quickFixItem) return;
+    const nextLines = [...lines];
+    nextLines[quickFixItem.diag.line - 1] = quickFixItem.fix.newLineText;
+    onChange(nextLines.join('\n'));
+  };
 
   const syncScroll = () => {
     const textarea = textareaRef.current;
@@ -138,7 +186,10 @@ export function CodeEditor({
       setAutocomplete(null);
       return;
     }
-    const result = getAutocompleteSuggestions(nextCode, cursorIndex, forceOpen);
+    const result = getAutocompleteSuggestions(nextCode, cursorIndex, forceOpen, {
+      definedSections,
+      sampleNames,
+    });
     setAutocomplete(result);
     setSelectedIndex(0);
   };
@@ -167,8 +218,46 @@ export function CodeEditor({
   const handleChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextCode = event.target.value;
     const cursor = event.target.selectionStart ?? nextCode.length;
+    onCursorChange?.(cursor);
     onChange(nextCode);
     refreshAutocomplete(nextCode, cursor, false);
+  };
+
+  const handleMouseMove = (event: React.MouseEvent<HTMLTextAreaElement>) => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const rect = ta.getBoundingClientRect();
+    const relX = event.clientX - rect.left + ta.scrollLeft - 16;
+    const relY = event.clientY - rect.top + ta.scrollTop - 12;
+    const lineIdx = Math.floor(relY / lineHeightPx);
+    const colIdx = Math.floor(relX / charWidthApproxPx);
+    if (lineIdx < 0 || lineIdx >= lines.length || colIdx < 0) {
+      if (hoverDoc) setHoverDoc(null);
+      return;
+    }
+    const lineText = lines[lineIdx];
+    if (colIdx >= lineText.length) {
+      if (hoverDoc) setHoverDoc(null);
+      return;
+    }
+    const isWord = (c: string) => /[A-Za-z0-9_-]/.test(c);
+    if (!isWord(lineText[colIdx])) {
+      if (hoverDoc) setHoverDoc(null);
+      return;
+    }
+    let start = colIdx;
+    let end = colIdx;
+    while (start > 0 && isWord(lineText[start - 1])) start -= 1;
+    while (end < lineText.length && isWord(lineText[end])) end += 1;
+    const word = lineText.slice(start, end);
+    const doc = getHoverDoc(word);
+    if (!doc) {
+      if (hoverDoc) setHoverDoc(null);
+      return;
+    }
+    const top = Math.max(8, (lineIdx + 1) * lineHeightPx + 14 - ta.scrollTop);
+    const left = Math.max(16, Math.min(rect.width - 300, event.clientX - rect.left));
+    setHoverDoc({ doc, top, left });
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -233,6 +322,30 @@ export function CodeEditor({
     }
   };
 
+  const handleDrop = (event: React.DragEvent<HTMLTextAreaElement>) => {
+    const snippet =
+      event.dataTransfer.getData('application/x-sythm-component') ||
+      event.dataTransfer.getData('text/plain');
+    if (!snippet) return;
+    event.preventDefault();
+
+    const ta = textareaRef.current;
+    const insertPos = ta ? (ta.selectionStart ?? code.length) : code.length;
+    const needsNewline = insertPos > 0 && code[insertPos - 1] !== '\n';
+    const insertion = `${needsNewline ? '\n' : ''}${snippet}`;
+    const nextCode = `${code.slice(0, insertPos)}${insertion}${code.slice(insertPos)}`;
+    const nextCursor = insertPos + insertion.length;
+    onChange(nextCode);
+    onCursorChange?.(nextCursor);
+    window.requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.selectionStart = nextCursor;
+        textareaRef.current.selectionEnd = nextCursor;
+      }
+    });
+  };
+
   const popupTop = autocomplete
     ? Math.max(8, (autocomplete.lineIndex + 1) * lineHeightPx + 12 - scrollPos.top)
     : 0;
@@ -249,10 +362,46 @@ export function CodeEditor({
           <span aria-hidden="true">/</span>
           <span className="font-medium text-[var(--sythm-text-primary)]">{filename}</span>
         </div>
-        <div className="text-[11px] opacity-80">
-          Ctrl+Space Auto Complete · Ctrl+Enter Play
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setFollowPlayhead((prev) => !prev)}
+            title="Rolar editor automaticamente para acompanhar a linha em execução"
+            className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition ${
+              followPlayhead
+                ? 'bg-[var(--sythm-accent)]/20 text-[var(--sythm-accent)]'
+                : 'bg-[#2a2b30] text-[var(--sythm-text-secondary)] hover:text-white'
+            }`}
+          >
+            <Sparkles className="h-3 w-3" />
+            <span>Seguir Playhead</span>
+          </button>
+          <span className="text-[11px] opacity-80">
+            Ctrl+Space Auto Complete · Ctrl+Enter Play
+          </span>
         </div>
       </div>
+
+      {/* Quick-Fix Banner for common syntax errors */}
+      {quickFixItem && (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#ff453a]/30 bg-[#ff453a]/10 px-3 py-1.5 text-xs text-[#ffb4ab]">
+          <div className="flex min-w-0 items-center gap-2">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#ff6961]" />
+            <span className="truncate">
+              <strong className="font-mono-code">L{quickFixItem.diag.line}:</strong>{' '}
+              {quickFixItem.diag.message}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={applyQuickFix}
+            className="flex shrink-0 items-center gap-1 rounded bg-[#ff453a]/25 px-2.5 py-0.5 text-[11px] font-medium text-white transition hover:bg-[#ff453a]/40"
+          >
+            <Wrench className="h-3 w-3" />
+            <span>Quick-Fix: {quickFixItem.fix.label}</span>
+          </button>
+        </div>
+      )}
 
       {/* Editor Body */}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -284,6 +433,9 @@ export function CodeEditor({
                   }`}
                 >
                   {hasError && <AlertCircle className="h-3 w-3 shrink-0 text-[#ff6961]" />}
+                  {!hasError && isActive && (
+                    <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--sythm-accent)]" />
+                  )}
                   <span>{lineNumber}</span>
                 </div>
               );
@@ -312,7 +464,7 @@ export function CodeEditor({
                     hasError
                       ? 'bg-[#ff453a]/12'
                       : isActive
-                        ? 'bg-[var(--sythm-accent)]/15'
+                        ? 'border-l-2 border-[var(--sythm-accent)] bg-[var(--sythm-accent)]/15'
                         : ''
                   }
                 >
@@ -336,7 +488,20 @@ export function CodeEditor({
             onChange={handleChange}
             onScroll={syncScroll}
             onKeyDown={handleKeyDown}
-            onClick={() => setAutocomplete(null)}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={() => setHoverDoc(null)}
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes('application/x-sythm-component')) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+              }
+            }}
+            onDrop={handleDrop}
+            onSelect={(e) => onCursorChange?.(e.currentTarget.selectionStart ?? 0)}
+            onClick={(e) => {
+              onCursorChange?.(e.currentTarget.selectionStart ?? 0);
+              setAutocomplete(null);
+            }}
             onBlur={() => {
               // Small delay so mousedown/click on autocomplete item fires first
               window.setTimeout(() => setAutocomplete(null), 120);
@@ -385,6 +550,24 @@ export function CodeEditor({
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Hover Documentation Tooltip */}
+          {hoverDoc && !autocomplete && (
+            <div
+              style={{ top: hoverDoc.top, left: hoverDoc.left }}
+              className="pointer-events-none absolute z-30 w-72 rounded-lg border border-[#4a4d55] bg-[#1e1f23]/95 p-2.5 text-xs shadow-xl backdrop-blur"
+            >
+              <div className="font-mono-code text-[11px] font-bold text-[#64d2ff]">
+                {hoverDoc.doc.title}
+              </div>
+              <div className="mt-1 rounded bg-[#141518] px-1.5 py-1 font-mono-code text-[10px] text-[#d0a8ff]">
+                {hoverDoc.doc.syntax}
+              </div>
+              <p className="mt-1 text-[11px] leading-snug text-[#c7c7cc]">
+                {hoverDoc.doc.description}
+              </p>
             </div>
           )}
 

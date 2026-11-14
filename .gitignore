@@ -11,5 +11,6 @@ coverage/
 !.env.example
 .idea/
 .vscode/*
+data/
 !.vscode/extensions.json
 

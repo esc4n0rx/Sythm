@@ -1,4 +1,4 @@
-import { Drum, SlidersHorizontal, Waves } from 'lucide-react';
+import { Circle, Drum, SlidersHorizontal, Square, Waves } from 'lucide-react';
 import type { ControlDescriptor, TrackSummary } from '@sythm/core';
 import { ControlSlider } from './ControlSlider';
 
@@ -9,6 +9,9 @@ interface TrackMixerBarProps {
   activeTracks: ReadonlySet<string>;
   mutedTracks: ReadonlySet<string>;
   soloedTracks: ReadonlySet<string>;
+  isRecordingAutomation?: boolean;
+  recordedKeyframesCount?: number;
+  onToggleRecordAutomation?: () => void;
   onToggleMute: (trackName: string) => void;
   onToggleSolo: (trackName: string) => void;
   onControlChange: (control: ControlDescriptor, newValue: number) => void;
@@ -21,6 +24,9 @@ export function TrackMixerBar({
   activeTracks,
   mutedTracks,
   soloedTracks,
+  isRecordingAutomation = false,
+  recordedKeyframesCount = 0,
+  onToggleRecordAutomation,
   onToggleMute,
   onToggleSolo,
   onControlChange,
@@ -46,6 +52,35 @@ export function TrackMixerBar({
       <span className="shrink-0 text-[11px] font-semibold tracking-wider text-[#aeaeb2] uppercase">
         Tracks ({tracks.length})
       </span>
+
+      {controls.length > 0 && onToggleRecordAutomation && (
+        <button
+          type="button"
+          onClick={onToggleRecordAutomation}
+          title={
+            isRecordingAutomation
+              ? 'Parar gravação e injetar automação (RAMP) no código'
+              : 'Gravar movimentos dos sliders em tempo real e gerar RAMP no código'
+          }
+          className={`flex shrink-0 cursor-pointer items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
+            isRecordingAutomation
+              ? 'border-[#ff453a] bg-[#ff453a]/25 text-[#ff8a80] animate-pulse'
+              : 'border-[#4a4d55] bg-[#2a2b30] text-[#d1d1d6] hover:border-[#ff453a]/60 hover:text-white'
+          }`}
+        >
+          {isRecordingAutomation ? (
+            <>
+              <Square className="h-2.5 w-2.5 fill-current" />
+              <span>REC ({recordedKeyframesCount})</span>
+            </>
+          ) : (
+            <>
+              <Circle className="h-2.5 w-2.5 fill-[#ff453a] text-[#ff453a]" />
+              <span>REC Automação</span>
+            </>
+          )}
+        </button>
+      )}
 
       <div className="flex items-center gap-2">
         {tracks.map((track) => {

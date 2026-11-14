@@ -1,6 +1,7 @@
 import type { IParser, ParserResult } from '../../application/ports/IParser.js';
 import type {
   ArpDirection,
+  AutomationParam,
   DivisionKind,
   DivisionNode,
   DrumType,
@@ -84,6 +85,13 @@ const STATEMENT_START_TOKENS = new Set<TokenType>([
   TokenType.SWEEP,
   TokenType.TRANSPOSE,
   TokenType.SCALE,
+  TokenType.HUMANIZE,
+  TokenType.SWING,
+  TokenType.MAYBE,
+  TokenType.CHOOSE,
+  TokenType.RAMP,
+  TokenType.AUTOMATE,
+  TokenType.PATTERN,
   TokenType.PLAY,
   TokenType.ARPEGGIATE,
   TokenType.ARP,
@@ -249,9 +257,27 @@ export class CobolStyleParser implements IParser {
         token.type === TokenType.LFO ||
         token.type === TokenType.SWEEP ||
         token.type === TokenType.TRANSPOSE ||
-        token.type === TokenType.SCALE
+        token.type === TokenType.SCALE ||
+        token.type === TokenType.HUMANIZE ||
+        token.type === TokenType.SWING
       ) {
         return this.parseConfigAfterOptionalSet(token);
+      }
+
+      if (token.type === TokenType.MAYBE) {
+        return this.parseMaybeStatement();
+      }
+
+      if (token.type === TokenType.CHOOSE) {
+        return this.parseChooseOneStatement(token);
+      }
+
+      if (token.type === TokenType.RAMP || token.type === TokenType.AUTOMATE) {
+        return this.parseRampStatement();
+      }
+
+      if (token.type === TokenType.PATTERN) {
+        return this.parsePatternStatement();
       }
 
       if (this.isSectionStart()) {
@@ -606,6 +632,14 @@ export class CobolStyleParser implements IParser {
 
     if (target.type === TokenType.SWEEP) {
       return this.parseSweepStatement(originToken);
+    }
+
+    if (target.type === TokenType.HUMANIZE) {
+      return this.parseHumanizeStatement(originToken);
+    }
+
+    if (target.type === TokenType.SWING) {
+      return this.parseSwingStatement(originToken);
     }
 
     this.reportError(
@@ -1234,6 +1268,10 @@ export class CobolStyleParser implements IParser {
   private parsePlayStatement(): StatementNode {
     const playToken = this.advance();
 
+    if (this.check(TokenType.CHOOSE)) {
+      return this.parseChooseOneStatement(playToken);
+    }
+
     if (this.match(TokenType.NOTE)) {
       const noteToken = this.consumeNote('Esperada nota musical após PLAY NOTE (ex: C4, F#3, Bb4).');
       const beats = this.parseOptionalForBeats(1);
@@ -1842,6 +1880,365 @@ export class CobolStyleParser implements IParser {
     const value = Number(numToken.literal);
     this.match(TokenType.BEAT, TokenType.BEATS);
     return value;
+  }
+
+  private parseMaybeStatement(): StatementNode {
+    const originToken = this.advance(); // MAYBE
+    const probToken = this.consumeNumber(
+      'Esperado percentual de probabilidade após MAYBE (ex: MAYBE 50 PERCENT PLAY KICK.).',
+    );
+    const probabilityPercent = Number(probToken.literal);
+    if (probabilityPercent < 0 || probabilityPercent > 100) {
+      this.reportError(
+        probToken,
+        `Probabilidade inválida (${probabilityPercent}%). Use um valor entre 0 e 100.`,
+      );
+      throw new Error('ParseError');
+    }
+    this.match(TokenType.PERCENT);
+
+    const inner = this.parseStatement();
+    if (!inner) {
+      this.reportError(
+        this.peek(),
+        'Esperado comando válido após MAYBE <%> PERCENT (ex: PLAY KICK.).',
+      );
+      throw new Error('ParseError');
+    }
+
+    return {
+      kind: 'MaybeStatement',
+      probabilityPercent,
+      statement: inner,
+      line: originToken.line,
+      column: originToken.column,
+    };
+  }
+
+  private parseChooseOneStatement(originToken: Token): StatementNode {
+    // If called directly (CHOOSE ...), advance CHOOSE; if called from PLAY CHOOSE ..., advance CHOOSE too.
+    if (this.check(TokenType.CHOOSE)) {
+      this.advance();
+    }
+    this.match(TokenType.ONE);
+    this.match(TokenType.OF);
+
+    const hasParens = this.match(TokenType.LPAREN);
+    const notes: string[] = [];
+    const drums: DrumType[] = [];
+
+    while (!this.isAtEnd()) {
+      if (hasParens && this.check(TokenType.RPAREN)) {
+        this.advance();
+        break;
+      }
+      if (
+        !hasParens &&
+        (this.check(TokenType.FOR) || this.check(TokenType.DOT))
+      ) {
+        break;
+      }
+      if (this.match(TokenType.COMMA)) {
+        continue;
+      }
+
+      const current = this.peek();
+      if (current.type === TokenType.NOTE_LITERAL) {
+        this.advance();
+        notes.push(String(current.literal ?? current.lexeme));
+        continue;
+      }
+      if (current.type === TokenType.DRUM_LITERAL && current.literal) {
+        this.advance();
+        drums.push(current.literal as DrumType);
+        continue;
+      }
+
+      this.reportError(
+        current,
+        `Item inválido "${current.lexeme}" em CHOOSE ONE OF. Use notas (C4, Eb4) ou tambores (KICK, SNARE).`,
+      );
+      throw new Error('ParseError');
+    }
+
+    if (notes.length > 0 && drums.length > 0) {
+      this.reportError(
+        originToken,
+        'CHOOSE ONE OF não pode misturar notas e tambores na mesma lista.',
+      );
+      throw new Error('ParseError');
+    }
+
+    if (notes.length === 0 && drums.length === 0) {
+      this.reportError(
+        originToken,
+        'CHOOSE ONE OF precisa de pelo menos uma nota ou tambor.',
+      );
+      throw new Error('ParseError');
+    }
+
+    const beats = this.parseOptionalForBeats(1);
+    this.expectSentenceEnd(originToken);
+
+    if (drums.length > 0) {
+      return {
+        kind: 'ChooseOneStatement',
+        targetKind: 'drum',
+        drums,
+        beats,
+        line: originToken.line,
+        column: originToken.column,
+      };
+    }
+
+    return {
+      kind: 'ChooseOneStatement',
+      targetKind: 'note',
+      notes,
+      beats,
+      line: originToken.line,
+      column: originToken.column,
+    };
+  }
+
+  private parseHumanizeStatement(originToken: Token): StatementNode {
+    this.advance(); // HUMANIZE
+    this.match(TokenType.IS, TokenType.TO);
+
+    if (this.match(TokenType.OFF)) {
+      this.expectSentenceEnd(originToken);
+      return {
+        kind: 'HumanizeStatement',
+        mode: 'off',
+        timingMs: 0,
+        velocityPercent: 0,
+        line: originToken.line,
+        column: originToken.column,
+      };
+    }
+
+    const msToken = this.consumeNumber(
+      'Esperado valor em MS após HUMANIZE (ex: HUMANIZE 15 MS.).',
+    );
+    const timingMs = Number(msToken.literal);
+    if (timingMs < 0 || timingMs > 250) {
+      this.reportError(
+        msToken,
+        `Valor de HUMANIZE inválido (${timingMs} MS). Use entre 0 e 250 MS.`,
+      );
+      throw new Error('ParseError');
+    }
+    this.match(TokenType.MS);
+
+    let velocityPercent = 15;
+    if (this.match(TokenType.VELOCITY)) {
+      this.match(TokenType.IS, TokenType.TO);
+      const velToken = this.consumeNumber(
+        'Esperado percentual após VELOCITY em HUMANIZE (ex: VELOCITY 20 PERCENT).',
+      );
+      velocityPercent = Number(velToken.literal);
+      if (velocityPercent < 0 || velocityPercent > 100) {
+        this.reportError(
+          velToken,
+          `VELOCITY de HUMANIZE inválido (${velocityPercent}%). Use entre 0 e 100%.`,
+        );
+        throw new Error('ParseError');
+      }
+      this.match(TokenType.PERCENT);
+    }
+
+    this.expectSentenceEnd(originToken);
+    return {
+      kind: 'HumanizeStatement',
+      mode: timingMs === 0 && velocityPercent === 0 ? 'off' : 'on',
+      timingMs,
+      velocityPercent,
+      line: originToken.line,
+      column: originToken.column,
+    };
+  }
+
+  private parseSwingStatement(originToken: Token): StatementNode {
+    this.advance(); // SWING
+    this.match(TokenType.IS, TokenType.TO);
+
+    if (this.match(TokenType.OFF)) {
+      this.expectSentenceEnd(originToken);
+      return {
+        kind: 'SwingStatement',
+        percent: 0,
+        line: originToken.line,
+        column: originToken.column,
+      };
+    }
+
+    const pctToken = this.consumeNumber(
+      'Esperado percentual após SWING (ex: SWING IS 55 PERCENT.).',
+    );
+    const percent = Number(pctToken.literal);
+    if (percent < 0 || percent > 100) {
+      this.reportError(
+        pctToken,
+        `SWING inválido (${percent}%). Use entre 0 e 100%.`,
+      );
+      throw new Error('ParseError');
+    }
+    this.match(TokenType.PERCENT);
+    this.expectSentenceEnd(originToken);
+
+    return {
+      kind: 'SwingStatement',
+      percent,
+      line: originToken.line,
+      column: originToken.column,
+    };
+  }
+
+  private parseRampStatement(): StatementNode {
+    const originToken = this.advance(); // RAMP or AUTOMATE
+    const paramToken = this.peek();
+
+    const PARAM_MAP: Partial<Record<TokenType, AutomationParam>> = {
+      [TokenType.FILTER]: 'filter',
+      [TokenType.VOLUME]: 'volume',
+      [TokenType.PAN]: 'pan',
+      [TokenType.REVERB]: 'reverb',
+      [TokenType.DELAY]: 'delay',
+      [TokenType.TEMPO]: 'tempo',
+    };
+
+    const param = PARAM_MAP[paramToken.type];
+    if (!param) {
+      this.reportError(
+        paramToken,
+        `Parâmetro inválido "${paramToken.lexeme}" em ${originToken.lexeme}. Use FILTER, VOLUME, PAN, REVERB, DELAY ou TEMPO.`,
+      );
+      throw new Error('ParseError');
+    }
+    this.advance();
+
+    if (!this.match(TokenType.FROM)) {
+      this.reportError(
+        this.peek(),
+        `Esperado FROM após ${paramToken.lexeme} (ex: RAMP FILTER FROM 200 TO 4000 OVER 8 BEATS.).`,
+      );
+      throw new Error('ParseError');
+    }
+
+    const startTok = this.consumeNumber('Esperado valor inicial após FROM.');
+    const startValue = Number(startTok.literal);
+    this.match(TokenType.HZ, TokenType.PERCENT, TokenType.BPM);
+
+    if (!this.match(TokenType.TO)) {
+      this.reportError(this.peek(), 'Esperado TO após valor inicial do RAMP.');
+      throw new Error('ParseError');
+    }
+
+    const endTok = this.consumeNumber('Esperado valor final após TO.');
+    const endValue = Number(endTok.literal);
+    this.match(TokenType.HZ, TokenType.PERCENT, TokenType.BPM);
+
+    if (!this.match(TokenType.OVER, TokenType.FOR)) {
+      this.reportError(this.peek(), 'Esperado OVER <N> BEATS no comando RAMP.');
+      throw new Error('ParseError');
+    }
+
+    const durTok = this.consumeNumber('Esperado número de beats após OVER.');
+    const durationBeats = Number(durTok.literal);
+    if (durationBeats <= 0) {
+      this.reportError(durTok, 'Duração de RAMP deve ser maior que 0 beats.');
+      throw new Error('ParseError');
+    }
+    this.match(TokenType.BEAT, TokenType.BEATS);
+    this.expectSentenceEnd(originToken);
+
+    return {
+      kind: 'RampStatement',
+      param,
+      startValue,
+      endValue,
+      durationBeats,
+      line: originToken.line,
+      column: originToken.column,
+    };
+  }
+
+  private parsePatternStatement(): StatementNode {
+    const originToken = this.advance(); // PATTERN
+    const targetToken = this.peek();
+
+    let targetKind: 'drum' | 'note';
+    let drum: DrumType | undefined;
+    let note: string | undefined;
+
+    if (targetToken.type === TokenType.DRUM_LITERAL && targetToken.literal) {
+      this.advance();
+      targetKind = 'drum';
+      drum = targetToken.literal as DrumType;
+    } else if (targetToken.type === TokenType.NOTE_LITERAL) {
+      this.advance();
+      targetKind = 'note';
+      note = String(targetToken.literal ?? targetToken.lexeme);
+    } else {
+      this.reportError(
+        targetToken,
+        `Alvo inválido "${targetToken.lexeme}" em PATTERN. Use um tambor (KICK, SNARE, HIHAT) ou nota (C4, Eb2).`,
+      );
+      throw new Error('ParseError');
+    }
+
+    this.match(TokenType.IS, TokenType.TO);
+    const strToken = this.peek();
+    if (strToken.type !== TokenType.STRING) {
+      this.reportError(
+        strToken,
+        'Esperada string de padrão após PATTERN (ex: PATTERN KICK IS "x..x..x.x..x....".).',
+      );
+      throw new Error('ParseError');
+    }
+    this.advance();
+    const rawPattern = String(strToken.literal ?? '');
+    const cleanedPattern = rawPattern.replace(/\s+/g, '');
+    if (cleanedPattern.length === 0) {
+      this.reportError(strToken, 'String de PATTERN não pode estar vazia.');
+      throw new Error('ParseError');
+    }
+
+    let stepBeats = 0.25;
+    let totalBeats: number | undefined;
+
+    if (this.match(TokenType.STEP)) {
+      this.match(TokenType.IS, TokenType.TO);
+      const stepTok = this.consumeNumber('Esperado duração em beats após STEP.');
+      stepBeats = Number(stepTok.literal);
+      if (stepBeats <= 0) {
+        this.reportError(stepTok, 'STEP do PATTERN deve ser maior que 0.');
+        throw new Error('ParseError');
+      }
+      this.match(TokenType.BEAT, TokenType.BEATS);
+    } else if (this.match(TokenType.FOR)) {
+      const totalTok = this.consumeNumber('Esperado duração total em beats após FOR.');
+      totalBeats = Number(totalTok.literal);
+      if (totalBeats <= 0) {
+        this.reportError(totalTok, 'Duração total do PATTERN deve ser maior que 0.');
+        throw new Error('ParseError');
+      }
+      this.match(TokenType.BEAT, TokenType.BEATS);
+      stepBeats = totalBeats / cleanedPattern.length;
+    }
+
+    this.expectSentenceEnd(originToken);
+    return {
+      kind: 'PatternStatement',
+      targetKind,
+      drum,
+      note,
+      pattern: cleanedPattern,
+      stepBeats,
+      totalBeats,
+      line: originToken.line,
+      column: originToken.column,
+    };
   }
 
   private expectSentenceEnd(originToken: Token): void {

@@ -1,4 +1,4 @@
-import { ChordParser, NoteFrequency } from '@sythm/core';
+import { type CompilationDiagnostic, ChordParser, NoteFrequency } from '@sythm/core';
 
 export type HighlightTokenKind =
   | 'comment'
@@ -40,6 +40,22 @@ export interface AutocompleteResult {
   readonly lineIndex: number;
   readonly columnIndex: number;
   readonly items: AutocompleteItem[];
+}
+
+export interface AutocompleteContext {
+  readonly definedSections?: readonly string[];
+  readonly sampleNames?: readonly string[];
+}
+
+export interface HoverDoc {
+  readonly title: string;
+  readonly syntax: string;
+  readonly description: string;
+}
+
+export interface QuickFixAction {
+  readonly label: string;
+  readonly newLineText: string;
 }
 
 const DIVISION_WORDS = new Set([
@@ -148,6 +164,17 @@ const KEYWORD_WORDS = new Set([
   'DEPTH',
   'SWEEP',
   'OVER',
+  'MAYBE',
+  'CHOOSE',
+  'ONE',
+  'OF',
+  'HUMANIZE',
+  'MS',
+  'VELOCITY',
+  'RAMP',
+  'AUTOMATE',
+  'PATTERN',
+  'SWING',
 ]);
 
 const WAVEFORM_WORDS = new Set([
@@ -621,10 +648,44 @@ function getContextItems(
   return GENERAL_ITEMS;
 }
 
+function extractDeclaredSections(code: string): string[] {
+  const seen = new Set<string>();
+  const regex = /^\s*(?:([A-Za-z0-9_-]+)\s+SECTION|SECTION\s+([A-Za-z0-9_-]+))\s*\./gim;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(code)) !== null) {
+    const raw = (match[1] ?? match[2] ?? '').toUpperCase();
+    if (raw && raw !== 'PROCEDURES' && raw !== 'PROCEDURE' && raw !== 'PATTERNS') {
+      seen.add(raw);
+    }
+  }
+  return Array.from(seen);
+}
+
+const COMMON_CHORD_ITEMS: AutocompleteItem[] = [
+  { label: 'Cmaj7', insertText: 'Cmaj7', kind: 'note', detail: 'Acorde Dó maior com 7ª maior' },
+  { label: 'Am7', insertText: 'Am7', kind: 'note', detail: 'Acorde Lá menor com 7ª' },
+  { label: 'Fmaj7', insertText: 'Fmaj7', kind: 'note', detail: 'Acorde Fá maior com 7ª maior' },
+  { label: 'G7', insertText: 'G7', kind: 'note', detail: 'Acorde Sol dominante' },
+  { label: 'Dm7', insertText: 'Dm7', kind: 'note', detail: 'Acorde Ré menor com 7ª' },
+  { label: 'Em7', insertText: 'Em7', kind: 'note', detail: 'Acorde Mi menor com 7ª' },
+  { label: 'F#m7', insertText: 'F#m7', kind: 'note', detail: 'Acorde Fá# menor com 7ª' },
+  { label: 'Bb', insertText: 'Bb', kind: 'note', detail: 'Acorde Si bemol maior' },
+];
+
+const PHASE1_GENERAL_ITEMS: AutocompleteItem[] = [
+  { label: 'MAYBE 50 PERCENT PLAY ...', insertText: 'MAYBE 50 PERCENT PLAY DRUM KICK FOR 1 BEAT.', kind: 'snippet', detail: 'Execução probabilística (0–100%)' },
+  { label: 'CHOOSE ONE OF (...)', insertText: 'PLAY CHOOSE ONE OF (C4, E4, G4, B4) FOR 0.5 BEATS.', kind: 'snippet', detail: 'Sorteia uma nota ou tambor por ciclo' },
+  { label: 'PATTERN KICK IS "..."', insertText: 'PATTERN KICK IS "x... x... x..x ....".', kind: 'snippet', detail: 'Step sequencer inline (x, X, o, .)' },
+  { label: 'RAMP FILTER FROM ...', insertText: 'RAMP FILTER FROM 200 TO 4000 OVER 8 BEATS.', kind: 'snippet', detail: 'Automação temporal de parâmetro' },
+  { label: 'HUMANIZE 12 MS.', insertText: 'HUMANIZE 12 MS VELOCITY 15 PERCENT.', kind: 'command', detail: 'Micro-variação de tempo e dinâmica' },
+  { label: 'SWING IS 55 PERCENT.', insertText: 'SWING IS 55 PERCENT.', kind: 'command', detail: 'Groove / atraso nos contratempos' },
+];
+
 export function getAutocompleteSuggestions(
   code: string,
   cursorIndex: number,
   forceOpen: boolean,
+  extraContext?: AutocompleteContext,
 ): AutocompleteResult | null {
   const beforeCursor = code.slice(0, cursorIndex);
   const lastNewline = beforeCursor.lastIndexOf('\n');
@@ -651,9 +712,43 @@ export function getAutocompleteSuggestions(
   }
 
   const declaredControls = extractDeclaredControls(code);
-  const contextItems = getContextItems(lineBeforeWord, declaredControls);
+  const sectionNames = Array.from(
+    new Set([...(extraContext?.definedSections ?? []), ...extractDeclaredSections(code)]),
+  );
+  const sectionItems: AutocompleteItem[] = sectionNames.map((name) => ({
+    label: name,
+    insertText: `${name}.`,
+    kind: 'snippet',
+    detail: 'SECTION declarada no código',
+  }));
+  const sampleItems: AutocompleteItem[] = (extraContext?.sampleNames ?? []).map((name) => ({
+    label: `"${name}"`,
+    insertText: `"${name}" FOR 8 BEATS.`,
+    kind: 'snippet',
+    detail: 'Sample salvo no IndexedDB',
+  }));
+
+  const upperBeforeWord = lineBeforeWord.toUpperCase();
+  let contextItems: AutocompleteItem[];
+  if (/\bPERFORM\s*$/.test(upperBeforeWord) && sectionItems.length > 0) {
+    contextItems = sectionItems;
+  } else if (/\bPLAY\s+SAMPLE\s*$/.test(upperBeforeWord) && sampleItems.length > 0) {
+    contextItems = sampleItems;
+  } else if (/\bPLAY\s+CHORD(?:S)?\s*$/.test(upperBeforeWord) || /\bARPEGGIATE\s*$/.test(upperBeforeWord)) {
+    contextItems = COMMON_CHORD_ITEMS;
+  } else {
+    contextItems = getContextItems(lineBeforeWord, declaredControls);
+  }
+
   const upperPrefix = prefix.toUpperCase();
-  const searchableGeneral = [...declaredControls, ...GENERAL_ITEMS];
+  const searchableGeneral = [
+    ...declaredControls,
+    ...sectionItems,
+    ...sampleItems,
+    ...PHASE1_GENERAL_ITEMS,
+    ...COMMON_CHORD_ITEMS,
+    ...GENERAL_ITEMS,
+  ];
 
   const filtered = prefix
     ? contextItems.filter(
@@ -692,6 +787,117 @@ export function getAutocompleteSuggestions(
     endOffset: cursorIndex,
     lineIndex,
     columnIndex: currentLineBeforeCursor.length,
-    items: finalItems.slice(0, 8),
+    items: finalItems.slice(0, 10),
   };
+}
+
+const HOVER_DOCS: Record<string, HoverDoc> = {
+  PERFORM: {
+    title: 'PERFORM',
+    syntax: 'PERFORM <SECTION> [<N> TIMES].',
+    description: 'Executa uma sub-rotina declarada na PROCEDURES DIVISION.',
+  },
+  ARPEGGIATE: {
+    title: 'ARPEGGIATE',
+    syntax: 'ARPEGGIATE <ACORDE> UP | DOWN | UP-DOWN FOR <N> BEATS.',
+    description: 'Quebra um acorde ou lista de notas em sequência arpejada.',
+  },
+  EUCLIDEAN: {
+    title: 'PLAY EUCLIDEAN',
+    syntax: 'PLAY EUCLIDEAN <DRUM|NOTA> <PULSOS> IN <PASSOS> FOR <N> BEATS.',
+    description: 'Gera ritmo euclidiano (algoritmo de Bjorklund) distribuindo pulsos uniformemente.',
+  },
+  MAYBE: {
+    title: 'MAYBE',
+    syntax: 'MAYBE <0..100> PERCENT <COMANDO>.',
+    description: 'Executa o comando de forma probabilística a cada ciclo do loop.',
+  },
+  CHOOSE: {
+    title: 'CHOOSE ONE OF',
+    syntax: 'PLAY CHOOSE ONE OF (C4, E4, G4) FOR <N> BEATS.',
+    description: 'Escolhe aleatoriamente uma nota ou tambor da lista a cada ciclo.',
+  },
+  PATTERN: {
+    title: 'PATTERN',
+    syntax: 'PATTERN <DRUM|NOTA> IS "x..x..x." [STEP <N> BEATS | FOR <N> BEATS].',
+    description: 'Step sequencer inline: x = normal, X/* = acento, o = ghost, ./- = pausa.',
+  },
+  RAMP: {
+    title: 'RAMP / AUTOMATE',
+    syntax: 'RAMP <FILTER|VOLUME|PAN|REVERB|DELAY|TEMPO> FROM <A> TO <B> OVER <N> BEATS.',
+    description: 'Automatiza um parâmetro continuamente ao longo de N beats.',
+  },
+  AUTOMATE: {
+    title: 'AUTOMATE / RAMP',
+    syntax: 'AUTOMATE <PARAM> FROM <A> TO <B> OVER <N> BEATS.',
+    description: 'Alias para RAMP: cria curva temporal de automação.',
+  },
+  HUMANIZE: {
+    title: 'HUMANIZE',
+    syntax: 'HUMANIZE <N> MS [VELOCITY <%> PERCENT]. | HUMANIZE OFF.',
+    description: 'Adiciona micro-variações orgânicas de tempo e volume.',
+  },
+  SWING: {
+    title: 'SWING',
+    syntax: 'SWING IS <0..100> PERCENT. | SWING OFF.',
+    description: 'Atrasa os contratempos para criar groove/balanço.',
+  },
+  CONTROL: {
+    title: 'CONTROL (Slider)',
+    syntax: 'CONTROL <NOME> IS SLIDER <DEF> FROM <MIN> TO <MAX>.',
+    description: 'Cria um slider interativo em tempo real no editor e no Track Mixer.',
+  },
+  SAMPLE: {
+    title: 'PLAY SAMPLE',
+    syntax: 'PLAY SAMPLE "<arquivo>" [RATE <N>] [OFFSET <S> SEC] FOR <N> BEATS.',
+    description: 'Toca um áudio importado do IndexedDB sincronizado com os efeitos da track.',
+  },
+};
+
+export function getHoverDoc(word: string): HoverDoc | null {
+  const key = word.trim().toUpperCase();
+  if (!key) return null;
+  return HOVER_DOCS[key] ?? null;
+}
+
+export function getQuickFixForDiagnostic(
+  diag: CompilationDiagnostic,
+  lineText: string,
+): QuickFixAction | null {
+  const msg = diag.message.toLowerCase();
+  const trimmed = lineText.trimEnd();
+
+  if (
+    (msg.includes('ponto final') || msg.includes('esperado "."') || msg.includes('"."')) &&
+    trimmed.length > 0 &&
+    !trimmed.endsWith('.')
+  ) {
+    return {
+      label: 'Adicionar "." no final da linha',
+      newLineText: `${trimmed}.`,
+    };
+  }
+
+  if (msg.includes('end-track')) {
+    return {
+      label: 'Adicionar "END-TRACK."',
+      newLineText: `${lineText}\n  END-TRACK.`,
+    };
+  }
+
+  if (msg.includes('end-repeat')) {
+    return {
+      label: 'Adicionar "END-REPEAT."',
+      newLineText: `${lineText}\n  END-REPEAT.`,
+    };
+  }
+
+  if (msg.includes('end-section')) {
+    return {
+      label: 'Adicionar "END-SECTION."',
+      newLineText: `${lineText}\n  END-SECTION.`,
+    };
+  }
+
+  return null;
 }

@@ -1,11 +1,24 @@
 import type {
   AudioEffectsConfig,
+  AutomationParam,
   DrumType,
   ProgramNode,
   VisualizerMode,
   WaveformType,
 } from './Ast.js';
 import type { Token } from './Token.js';
+
+export interface EventAutomationRamp {
+  readonly param: Exclude<AutomationParam, 'tempo'>;
+  readonly fromValue: number;
+  readonly toValue: number;
+  readonly durationSec: number;
+}
+
+export interface HumanizeConfig {
+  readonly timingMs: number;
+  readonly velocityPercent: number;
+}
 
 export type ControlTargetParam =
   | 'volume'
@@ -58,6 +71,12 @@ export interface ScheduledAudioEvent {
   readonly volume: number;
   readonly effects: AudioEffectsConfig;
   readonly controlRefs?: Partial<Record<ControlTargetParam, string>>;
+  readonly probability?: number;
+  readonly noteChoices?: string[];
+  readonly frequencyChoices?: number[];
+  readonly drumChoices?: DrumType[];
+  readonly humanize?: HumanizeConfig;
+  readonly ramps?: EventAutomationRamp[];
   readonly line: number;
 }
 

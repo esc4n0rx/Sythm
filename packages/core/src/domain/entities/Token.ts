@@ -130,6 +130,19 @@ export enum TokenType {
   SUB_808 = 'SUB_808',
   PAD_WARM = 'PAD_WARM',
 
+  // Generative, Automation, Patterns & Groove (Phase 1)
+  MAYBE = 'MAYBE',
+  CHOOSE = 'CHOOSE',
+  ONE = 'ONE',
+  OF = 'OF',
+  HUMANIZE = 'HUMANIZE',
+  MS = 'MS',
+  VELOCITY = 'VELOCITY',
+  RAMP = 'RAMP',
+  AUTOMATE = 'AUTOMATE',
+  PATTERN = 'PATTERN',
+  SWING = 'SWING',
+
   // Literals & Punctuation
   NOTE_LITERAL = 'NOTE_LITERAL',
   DRUM_LITERAL = 'DRUM_LITERAL',
@@ -138,6 +151,8 @@ export enum TokenType {
   IDENTIFIER = 'IDENTIFIER',
   DOT = 'DOT',
   COMMA = 'COMMA',
+  LPAREN = 'LPAREN',
+  RPAREN = 'RPAREN',
   EOF = 'EOF',
 }
 

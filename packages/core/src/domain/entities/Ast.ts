@@ -31,6 +31,8 @@ export type ArpDirection = 'up' | 'down' | 'up-down';
 
 export type ScaleMode = 'major' | 'minor' | 'dorian' | 'phrygian' | 'pentatonic';
 
+export type AutomationParam = 'filter' | 'volume' | 'pan' | 'reverb' | 'delay' | 'tempo';
+
 export interface FilterSettings {
   readonly mode: FilterMode;
   readonly frequencyHz: number;
@@ -369,6 +371,62 @@ export interface SweepStatementNode {
   readonly column: number;
 }
 
+export interface MaybeStatementNode {
+  readonly kind: 'MaybeStatement';
+  readonly probabilityPercent: number;
+  readonly statement: StatementNode;
+  readonly line: number;
+  readonly column: number;
+}
+
+export interface ChooseOneStatementNode {
+  readonly kind: 'ChooseOneStatement';
+  readonly targetKind: 'note' | 'drum';
+  readonly notes?: string[];
+  readonly drums?: DrumType[];
+  readonly beats: number;
+  readonly line: number;
+  readonly column: number;
+}
+
+export interface HumanizeStatementNode {
+  readonly kind: 'HumanizeStatement';
+  readonly mode: 'on' | 'off';
+  readonly timingMs: number;
+  readonly velocityPercent: number;
+  readonly line: number;
+  readonly column: number;
+}
+
+export interface RampStatementNode {
+  readonly kind: 'RampStatement';
+  readonly param: AutomationParam;
+  readonly startValue: number;
+  readonly endValue: number;
+  readonly durationBeats: number;
+  readonly line: number;
+  readonly column: number;
+}
+
+export interface PatternStatementNode {
+  readonly kind: 'PatternStatement';
+  readonly targetKind: 'drum' | 'note';
+  readonly drum?: DrumType;
+  readonly note?: string;
+  readonly pattern: string;
+  readonly stepBeats: number;
+  readonly totalBeats?: number;
+  readonly line: number;
+  readonly column: number;
+}
+
+export interface SwingStatementNode {
+  readonly kind: 'SwingStatement';
+  readonly percent: number;
+  readonly line: number;
+  readonly column: number;
+}
+
 export type StatementNode =
   | ControlStatementNode
   | MetadataStatementNode
@@ -400,6 +458,12 @@ export type StatementNode =
   | PanStatementNode
   | LfoStatementNode
   | SweepStatementNode
+  | MaybeStatementNode
+  | ChooseOneStatementNode
+  | HumanizeStatementNode
+  | RampStatementNode
+  | PatternStatementNode
+  | SwingStatementNode
   | PrintStatementNode;
 
 export interface DivisionNode {

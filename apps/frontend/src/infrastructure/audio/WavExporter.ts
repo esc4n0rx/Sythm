@@ -88,8 +88,30 @@ export async function exportExecutionPlanToWav(
     return node;
   };
 
-  for (const event of plan.events) {
-    if (event.type === 'rest') continue;
+  for (const rawEvent of plan.events) {
+    if (rawEvent.type === 'rest') continue;
+    if (rawEvent.probability !== undefined && Math.random() * 100 >= rawEvent.probability) {
+      continue;
+    }
+
+    let event = rawEvent;
+    if (event.drumChoices && event.drumChoices.length > 0) {
+      const picked = event.drumChoices[Math.floor(Math.random() * event.drumChoices.length)];
+      event = { ...event, drum: picked, notes: [picked.toUpperCase()] };
+    } else if (event.noteChoices && event.frequencyChoices && event.noteChoices.length > 0) {
+      const idx = Math.floor(Math.random() * event.noteChoices.length);
+      event = { ...event, notes: [event.noteChoices[idx]], frequencies: [event.frequencyChoices[idx]] };
+    }
+
+    if (event.humanize) {
+      const deltaSec = ((Math.random() * 2 - 1) * event.humanize.timingMs) / 1000;
+      const velScale = 1 + (Math.random() * 2 - 1) * (event.humanize.velocityPercent / 100);
+      event = {
+        ...event,
+        startTimeSec: Math.max(0, event.startTimeSec + deltaSec),
+        volume: event.volume <= 0 ? 0 : Math.max(0.01, Math.min(0.45, event.volume * velScale)),
+      };
+    }
 
     const startAt = Math.max(0.01, event.startTimeSec + 0.02);
     const stopAt = startAt + event.durationSec + event.effects.envelope.releaseSec + 0.04;

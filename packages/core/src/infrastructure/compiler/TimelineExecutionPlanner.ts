@@ -2,9 +2,12 @@ import type { IExecutionPlanner, PlannerResult } from '../../application/ports/I
 import type {
   ArpDirection,
   AudioEffectsConfig,
+  AutomationParam,
+  ChooseOneStatementNode,
   DivisionKind,
   DrumType,
   NumericParamValue,
+  PatternStatementNode,
   ProgramNode,
   SectionStatementNode,
   StatementNode,
@@ -17,7 +20,9 @@ import type {
   ControlBinding,
   ControlDescriptor,
   ControlTargetParam,
+  EventAutomationRamp,
   ExecutionPlan,
+  HumanizeConfig,
   ScheduledAudioEvent,
   TrackSummary,
 } from '../../domain/entities/ExecutionPlan.js';
@@ -113,12 +118,24 @@ const DIVISION_ORDER: Record<DivisionKind, number> = {
   PLAY: 2,
 };
 
+interface ActiveRamp {
+  param: AutomationParam;
+  startValue: number;
+  endValue: number;
+  startBeat: number;
+  durationBeats: number;
+}
+
 interface TrackCursor {
   trackName: string;
   bpm: number;
   waveform: WaveformType;
   volume: number;
   transposeSemitones: number;
+  swingPercent: number;
+  humanize?: HumanizeConfig;
+  pendingProbability?: number;
+  activeRamps: ActiveRamp[];
   effects: AudioEffectsConfig;
   controlRefs: Partial<Record<ControlTargetParam, string>>;
   currentBeat: number;
@@ -174,6 +191,8 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
         waveform: DEFAULT_WAVEFORM,
         volume: DEFAULT_VOLUME,
         transposeSemitones: 0,
+        swingPercent: 0,
+        activeRamps: [],
         effects: cloneEffects(DEFAULT_EFFECTS),
         controlRefs: {},
         currentBeat: 0,
@@ -755,6 +774,10 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
             waveform: cursor.waveform,
             volume: cursor.volume,
             transposeSemitones: cursor.transposeSemitones,
+            swingPercent: cursor.swingPercent,
+            humanize: cursor.humanize ? { ...cursor.humanize } : undefined,
+            pendingProbability: cursor.pendingProbability,
+            activeRamps: [],
             effects: cloneEffects(cursor.effects),
             controlRefs: { ...cursor.controlRefs },
             currentBeat: 0,
@@ -764,6 +787,57 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
           };
           this.processStatements(stmt.statements, trackCursor, context);
           this.recordTrackSummary(trackCursor, context);
+          break;
+        }
+
+        case 'HumanizeStatement': {
+          cursor.humanize =
+            stmt.mode === 'off'
+              ? undefined
+              : {
+                  timingMs: stmt.timingMs,
+                  velocityPercent: stmt.velocityPercent,
+                };
+          break;
+        }
+
+        case 'SwingStatement': {
+          cursor.swingPercent = Math.max(0, Math.min(100, stmt.percent));
+          break;
+        }
+
+        case 'RampStatement': {
+          const valid = this.validateRampRange(stmt.param, stmt.startValue, stmt.endValue, stmt.line, stmt.column, context);
+          if (!valid) break;
+          cursor.activeRamps = cursor.activeRamps.filter((r) => r.param !== stmt.param);
+          cursor.activeRamps.push({
+            param: stmt.param,
+            startValue: stmt.startValue,
+            endValue: stmt.endValue,
+            startBeat: cursor.currentBeat,
+            durationBeats: stmt.durationBeats,
+          });
+          break;
+        }
+
+        case 'MaybeStatement': {
+          const prevProb = cursor.pendingProbability;
+          cursor.pendingProbability =
+            prevProb !== undefined
+              ? (prevProb * stmt.probabilityPercent) / 100
+              : stmt.probabilityPercent;
+          this.processStatements([stmt.statement], cursor, context);
+          cursor.pendingProbability = prevProb;
+          break;
+        }
+
+        case 'ChooseOneStatement': {
+          this.scheduleChooseOneEvent(stmt, cursor, context);
+          break;
+        }
+
+        case 'PatternStatement': {
+          this.schedulePatternEvents(stmt, cursor, context);
           break;
         }
 
@@ -1035,8 +1109,8 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       }
     }
 
-    const secondsPerBeat = 60 / cursor.bpm;
-    const durationSec = beats * secondsPerBeat;
+    const timing = this.computeEventTimingAndRamps(beats, cursor);
+    const effects = this.applyRampEffectsDefaults(cloneEffects(cursor.effects), timing.ramps);
 
     context.eventCounter += 1;
     cursor.eventCount += 1;
@@ -1048,18 +1122,20 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       frequencies,
       startBeat: cursor.currentBeat,
       durationBeats: beats,
-      startTimeSec: cursor.currentTimeSec,
-      durationSec,
-      bpm: cursor.bpm,
+      startTimeSec: timing.startTimeSec,
+      durationSec: timing.durationSec,
+      bpm: timing.effectiveBpm,
       waveform: cursor.waveform,
       volume: cursor.volume,
-      effects: cloneEffects(cursor.effects),
+      effects,
       controlRefs: this.cloneControlRefs(cursor.controlRefs),
+      probability: cursor.pendingProbability,
+      humanize: cursor.humanize ? { ...cursor.humanize } : undefined,
+      ramps: timing.ramps.length > 0 ? timing.ramps : undefined,
       line,
     });
 
-    cursor.currentBeat += beats;
-    cursor.currentTimeSec += durationSec;
+    this.advanceCursor(cursor, beats, timing.durationSec);
   }
 
   private scheduleDrumEvent(
@@ -1080,8 +1156,8 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       return;
     }
 
-    const secondsPerBeat = 60 / cursor.bpm;
-    const durationSec = beats * secondsPerBeat;
+    const timing = this.computeEventTimingAndRamps(beats, cursor);
+    const effects = this.applyRampEffectsDefaults(cloneEffects(cursor.effects), timing.ramps);
 
     context.eventCounter += 1;
     cursor.eventCount += 1;
@@ -1095,18 +1171,20 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       drum,
       startBeat: cursor.currentBeat,
       durationBeats: beats,
-      startTimeSec: cursor.currentTimeSec,
-      durationSec,
-      bpm: cursor.bpm,
+      startTimeSec: timing.startTimeSec,
+      durationSec: timing.durationSec,
+      bpm: timing.effectiveBpm,
       waveform: cursor.waveform,
       volume: cursor.volume,
-      effects: cloneEffects(cursor.effects),
+      effects,
       controlRefs: this.cloneControlRefs(cursor.controlRefs),
+      probability: cursor.pendingProbability,
+      humanize: cursor.humanize ? { ...cursor.humanize } : undefined,
+      ramps: timing.ramps.length > 0 ? timing.ramps : undefined,
       line,
     });
 
-    cursor.currentBeat += beats;
-    cursor.currentTimeSec += durationSec;
+    this.advanceCursor(cursor, beats, timing.durationSec);
   }
 
   private scheduleSampleEvent(
@@ -1129,8 +1207,8 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       return;
     }
 
-    const secondsPerBeat = 60 / cursor.bpm;
-    const durationSec = beats * secondsPerBeat;
+    const timing = this.computeEventTimingAndRamps(beats, cursor);
+    const effects = this.applyRampEffectsDefaults(cloneEffects(cursor.effects), timing.ramps);
 
     context.eventCounter += 1;
     cursor.eventCount += 1;
@@ -1145,18 +1223,20 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       sampleOffsetSec: offsetSec,
       startBeat: cursor.currentBeat,
       durationBeats: beats,
-      startTimeSec: cursor.currentTimeSec,
-      durationSec,
-      bpm: cursor.bpm,
+      startTimeSec: timing.startTimeSec,
+      durationSec: timing.durationSec,
+      bpm: timing.effectiveBpm,
       waveform: cursor.waveform,
       volume: cursor.volume,
-      effects: cloneEffects(cursor.effects),
+      effects,
       controlRefs: this.cloneControlRefs(cursor.controlRefs),
+      probability: cursor.pendingProbability,
+      humanize: cursor.humanize ? { ...cursor.humanize } : undefined,
+      ramps: timing.ramps.length > 0 ? timing.ramps : undefined,
       line,
     });
 
-    cursor.currentBeat += beats;
-    cursor.currentTimeSec += durationSec;
+    this.advanceCursor(cursor, beats, timing.durationSec);
   }
 
   private scheduleRest(
@@ -1176,8 +1256,7 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       return;
     }
 
-    const secondsPerBeat = 60 / cursor.bpm;
-    const durationSec = beats * secondsPerBeat;
+    const timing = this.computeEventTimingAndRamps(beats, cursor);
 
     context.eventCounter += 1;
     cursor.eventCount += 1;
@@ -1189,9 +1268,9 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       frequencies: [],
       startBeat: cursor.currentBeat,
       durationBeats: beats,
-      startTimeSec: cursor.currentTimeSec,
-      durationSec,
-      bpm: cursor.bpm,
+      startTimeSec: timing.startTimeSec,
+      durationSec: timing.durationSec,
+      bpm: timing.effectiveBpm,
       waveform: cursor.waveform,
       volume: 0,
       effects: cloneEffects(cursor.effects),
@@ -1199,7 +1278,303 @@ export class TimelineExecutionPlanner implements IExecutionPlanner {
       line,
     });
 
+    this.advanceCursor(cursor, beats, timing.durationSec);
+  }
+
+  private validateRampRange(
+    param: AutomationParam,
+    startValue: number,
+    endValue: number,
+    line: number,
+    column: number,
+    context: PlannerContext,
+  ): boolean {
+    if (param === 'filter' && (startValue < 20 || startValue > 20000 || endValue < 20 || endValue > 20000)) {
+      context.diagnostics.push({
+        severity: 'error',
+        message: 'RAMP FILTER deve usar frequências entre 20 e 20000 Hz.',
+        line,
+        column,
+      });
+      return false;
+    }
+    if (param === 'tempo' && (startValue < 20 || startValue > 400 || endValue < 20 || endValue > 400)) {
+      context.diagnostics.push({
+        severity: 'error',
+        message: 'RAMP TEMPO deve usar valores entre 20 e 400 BPM.',
+        line,
+        column,
+      });
+      return false;
+    }
+    if ((param === 'volume' || param === 'reverb' || param === 'delay') && (startValue < 0 || startValue > 100 || endValue < 0 || endValue > 100)) {
+      context.diagnostics.push({
+        severity: 'error',
+        message: `RAMP ${param.toUpperCase()} deve usar valores entre 0 e 100%.`,
+        line,
+        column,
+      });
+      return false;
+    }
+    if (param === 'pan' && (startValue < -100 || startValue > 100 || endValue < -100 || endValue > 100)) {
+      context.diagnostics.push({
+        severity: 'error',
+        message: 'RAMP PAN deve usar valores entre -100 e 100.',
+        line,
+        column,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  private computeEventTimingAndRamps(
+    beats: number,
+    cursor: TrackCursor,
+  ): {
+    effectiveBpm: number;
+    startTimeSec: number;
+    durationSec: number;
+    ramps: EventAutomationRamp[];
+  } {
+    const startBeat = cursor.currentBeat;
+    const endBeat = startBeat + beats;
+
+    let effectiveBpm = cursor.bpm;
+    const tempoRamp = cursor.activeRamps.find((r) => r.param === 'tempo');
+    if (tempoRamp && startBeat < tempoRamp.startBeat + tempoRamp.durationBeats && endBeat > tempoRamp.startBeat) {
+      const progress = Math.max(
+        0,
+        Math.min(1, (startBeat - tempoRamp.startBeat) / Math.max(0.0001, tempoRamp.durationBeats)),
+      );
+      effectiveBpm = Math.max(
+        20,
+        Math.min(400, tempoRamp.startValue + (tempoRamp.endValue - tempoRamp.startValue) * progress),
+      );
+    }
+
+    const secondsPerBeat = 60 / effectiveBpm;
+    const durationSec = beats * secondsPerBeat;
+
+    let swingOffsetBeats = 0;
+    if (cursor.swingPercent > 0) {
+      const modHalf = startBeat % 0.5;
+      const modWhole = startBeat % 1.0;
+      if (Math.abs(modHalf - 0.25) < 0.025) {
+        swingOffsetBeats = (cursor.swingPercent / 100) * 0.125;
+      } else if (beats >= 0.45 && Math.abs(modWhole - 0.5) < 0.025) {
+        swingOffsetBeats = (cursor.swingPercent / 100) * 0.1667;
+      }
+    }
+
+    const startTimeSec = cursor.currentTimeSec + swingOffsetBeats * secondsPerBeat;
+    const ramps: EventAutomationRamp[] = [];
+
+    for (const ramp of cursor.activeRamps) {
+      if (ramp.param === 'tempo') continue;
+      const rampEnd = ramp.startBeat + ramp.durationBeats;
+      if (startBeat < rampEnd && endBeat > ramp.startBeat) {
+        const t0 = Math.max(0, Math.min(1, (startBeat - ramp.startBeat) / ramp.durationBeats));
+        const t1 = Math.max(0, Math.min(1, (endBeat - ramp.startBeat) / ramp.durationBeats));
+        ramps.push({
+          param: ramp.param,
+          fromValue: ramp.startValue + (ramp.endValue - ramp.startValue) * t0,
+          toValue: ramp.startValue + (ramp.endValue - ramp.startValue) * t1,
+          durationSec,
+        });
+      }
+    }
+
+    return {
+      effectiveBpm,
+      startTimeSec,
+      durationSec,
+      ramps,
+    };
+  }
+
+  private applyRampEffectsDefaults(
+    effects: AudioEffectsConfig,
+    ramps: EventAutomationRamp[],
+  ): AudioEffectsConfig {
+    let next = effects;
+    for (const ramp of ramps) {
+      if (ramp.param === 'filter') {
+        next = {
+          ...next,
+          filter: {
+            mode: next.filter.mode === 'off' ? 'lowpass' : next.filter.mode,
+            frequencyHz: Math.max(20, Math.min(20000, ramp.fromValue)),
+            q: next.filter.q,
+          },
+        };
+      } else if (ramp.param === 'delay') {
+        next = {
+          ...next,
+          delay: {
+            ...next.delay,
+            mix: Math.max(0.001, Math.min(1, ramp.fromValue / 100)),
+          },
+        };
+      } else if (ramp.param === 'reverb') {
+        next = {
+          ...next,
+          reverbMix: Math.max(0.001, Math.min(1, ramp.fromValue / 100)),
+        };
+      } else if (ramp.param === 'pan') {
+        next = {
+          ...next,
+          pan: Math.max(-1, Math.min(1, ramp.fromValue / 100)),
+        };
+      }
+    }
+    return next;
+  }
+
+  private advanceCursor(cursor: TrackCursor, beats: number, durationSec: number): void {
     cursor.currentBeat += beats;
     cursor.currentTimeSec += durationSec;
+    if (cursor.activeRamps.length > 0) {
+      cursor.activeRamps = cursor.activeRamps.filter(
+        (r) => r.startBeat + r.durationBeats > cursor.currentBeat + 0.0001,
+      );
+    }
+  }
+
+  private scheduleChooseOneEvent(
+    stmt: ChooseOneStatementNode,
+    cursor: TrackCursor,
+    context: PlannerContext,
+  ): void {
+    if (stmt.beats <= 0) {
+      context.diagnostics.push({
+        severity: 'error',
+        message: `Duração em CHOOSE ONE OF deve ser maior que zero (recebido ${stmt.beats}).`,
+        line: stmt.line,
+        column: stmt.column,
+      });
+      return;
+    }
+
+    const timing = this.computeEventTimingAndRamps(stmt.beats, cursor);
+    const effects = this.applyRampEffectsDefaults(cloneEffects(cursor.effects), timing.ramps);
+
+    if (stmt.targetKind === 'drum' && stmt.drums && stmt.drums.length > 0) {
+      context.eventCounter += 1;
+      cursor.eventCount += 1;
+      cursor.hasDrums = true;
+      const firstDrum = stmt.drums[0];
+      context.events.push({
+        id: `evt-${context.eventCounter}`,
+        trackName: cursor.trackName,
+        type: 'drum',
+        notes: [firstDrum.toUpperCase()],
+        frequencies: [],
+        drum: firstDrum,
+        drumChoices: stmt.drums,
+        startBeat: cursor.currentBeat,
+        durationBeats: stmt.beats,
+        startTimeSec: timing.startTimeSec,
+        durationSec: timing.durationSec,
+        bpm: timing.effectiveBpm,
+        waveform: cursor.waveform,
+        volume: cursor.volume,
+        effects,
+        controlRefs: this.cloneControlRefs(cursor.controlRefs),
+        probability: cursor.pendingProbability,
+        humanize: cursor.humanize ? { ...cursor.humanize } : undefined,
+        ramps: timing.ramps.length > 0 ? timing.ramps : undefined,
+        line: stmt.line,
+      });
+      this.advanceCursor(cursor, stmt.beats, timing.durationSec);
+      return;
+    }
+
+    const rawNotes = stmt.notes ?? [];
+    const noteChoices: string[] = [];
+    const frequencyChoices: number[] = [];
+
+    for (const rawNote of rawNotes) {
+      try {
+        const effectiveNote =
+          cursor.transposeSemitones !== 0
+            ? NoteFrequency.transpose(rawNote, cursor.transposeSemitones)
+            : rawNote;
+        const parsed = NoteFrequency.parse(effectiveNote);
+        noteChoices.push(parsed.canonical);
+        frequencyChoices.push(parsed.frequencyHz);
+      } catch (err) {
+        context.diagnostics.push({
+          severity: 'error',
+          message: err instanceof Error ? err.message : `Nota inválida em CHOOSE ONE OF: ${rawNote}`,
+          line: stmt.line,
+          column: stmt.column,
+        });
+        return;
+      }
+    }
+
+    if (noteChoices.length === 0) return;
+
+    context.eventCounter += 1;
+    cursor.eventCount += 1;
+    context.events.push({
+      id: `evt-${context.eventCounter}`,
+      trackName: cursor.trackName,
+      type: 'note',
+      notes: [noteChoices[0]],
+      frequencies: [frequencyChoices[0]],
+      noteChoices,
+      frequencyChoices,
+      startBeat: cursor.currentBeat,
+      durationBeats: stmt.beats,
+      startTimeSec: timing.startTimeSec,
+      durationSec: timing.durationSec,
+      bpm: timing.effectiveBpm,
+      waveform: cursor.waveform,
+      volume: cursor.volume,
+      effects,
+      controlRefs: this.cloneControlRefs(cursor.controlRefs),
+      probability: cursor.pendingProbability,
+      humanize: cursor.humanize ? { ...cursor.humanize } : undefined,
+      ramps: timing.ramps.length > 0 ? timing.ramps : undefined,
+      line: stmt.line,
+    });
+
+    this.advanceCursor(cursor, stmt.beats, timing.durationSec);
+  }
+
+  private schedulePatternEvents(
+    stmt: PatternStatementNode,
+    cursor: TrackCursor,
+    context: PlannerContext,
+  ): void {
+    const savedVolume = cursor.volume;
+    for (const ch of stmt.pattern) {
+      if (context.events.length >= MAX_EVENTS) break;
+
+      if (ch === '.' || ch === '-' || ch === '_') {
+        this.scheduleRest(stmt.stepBeats, stmt.line, stmt.column, cursor, context);
+        continue;
+      }
+
+      let velScale = 1.0;
+      if (ch === 'X' || ch === '*') {
+        velScale = 1.25;
+      } else if (ch === 'o') {
+        velScale = 0.55;
+      } else if (ch !== 'x') {
+        this.scheduleRest(stmt.stepBeats, stmt.line, stmt.column, cursor, context);
+        continue;
+      }
+
+      cursor.volume = Math.min(0.4, savedVolume * velScale);
+      if (stmt.targetKind === 'drum' && stmt.drum) {
+        this.scheduleDrumEvent(stmt.drum, stmt.stepBeats, stmt.line, stmt.column, cursor, context);
+      } else if (stmt.targetKind === 'note' && stmt.note) {
+        this.scheduleNoteEvent('note', [stmt.note], stmt.stepBeats, stmt.line, stmt.column, cursor, context);
+      }
+      cursor.volume = savedVolume;
+    }
   }
 }

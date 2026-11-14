@@ -5,6 +5,7 @@ import type {
   DrumType,
   ExecutionPlan,
   ScheduledAudioEvent,
+  WaveformType,
 } from '@sythm/core';
 import {
   createImpulseBuffer,
@@ -20,6 +21,7 @@ export interface PlaybackCallbacks {
   onEventEnd?: (event: ScheduledAudioEvent, cycle: number) => void;
   onLogTrigger?: (log: ConsoleLogEntry, cycle: number) => void;
   onCycleStart?: (cycle: number) => void;
+  onHotSwap?: () => void;
   onComplete?: () => void;
 }
 
@@ -56,6 +58,10 @@ export class WebAudioEngine {
   private trackBuses: Map<string, TrackBus> = new Map();
   private activeNodes: Set<AudioScheduledSourceNode> = new Set();
   private timers: Set<number> = new Set();
+  private scheduledEntries: Array<{ startAt: number; timerIds: number[]; cleanup: () => void }> = [];
+  private cycleEndTimerId: number | null = null;
+  private pendingSwapTimerId: number | null = null;
+  private scheduledCycleDurationSec = 0;
   private running = false;
   private loopEnabled = false;
   private mutedTracks: ReadonlySet<string> = new Set();
@@ -125,6 +131,40 @@ export class WebAudioEngine {
     this.callbacks = { ...this.callbacks, loop };
   }
 
+  async previewNote(
+    frequencyHz: number,
+    waveform: WaveformType = 'triangle',
+    durationSec = 0.28,
+  ): Promise<void> {
+    const ctx = this.ensureContext();
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
+    }
+    if (!this.masterGain) return;
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type =
+      waveform === 'sine' || waveform === 'square' || waveform === 'sawtooth' || waveform === 'triangle'
+        ? waveform
+        : 'triangle';
+    osc.frequency.setValueAtTime(Math.max(20, Math.min(12000, frequencyHz)), now);
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.18, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + durationSec + 0.02);
+    osc.onended = () => {
+      osc.disconnect();
+      gain.disconnect();
+    };
+  }
+
   setMasterVolume(volumePercent: number): void {
     const normalized = Math.min(1, Math.max(0, volumePercent / 100));
     this.masterVolume = normalized;
@@ -163,6 +203,68 @@ export class WebAudioEngine {
   updatePlan(plan: ExecutionPlan): void {
     this.currentPlan = plan;
     this.syncControlDescriptors(plan);
+
+    if (!this.running || !this.loopEnabled || !this.context || plan.totalDurationSec <= 0) {
+      return;
+    }
+
+    const ctx = this.context;
+    const elapsedSec = Math.max(0, ctx.currentTime - this.cycleStartAudioTime);
+    const barDurationSec = (60 / Math.max(20, plan.initialBpm || 120)) * 4;
+    const nextBarIndex = Math.floor(elapsedSec / barDurationSec) + 1;
+    const nextBarOffsetSec = nextBarIndex * barDurationSec;
+
+    // If the next bar is basically at or past the end of the current cycle,
+    // the existing cycle-end timer will naturally pick up `this.currentPlan`.
+    if (nextBarOffsetSec >= this.scheduledCycleDurationSec - 0.05) {
+      return;
+    }
+
+    if (this.pendingSwapTimerId !== null) {
+      window.clearTimeout(this.pendingSwapTimerId);
+      this.timers.delete(this.pendingSwapTimerId);
+      this.pendingSwapTimerId = null;
+    }
+
+    const swapAudioTime = this.cycleStartAudioTime + nextBarOffsetSec;
+    const msUntilSwap = Math.max(0, (swapAudioTime - ctx.currentTime - 0.035) * 1000);
+
+    const timerId = window.setTimeout(() => {
+      this.timers.delete(timerId);
+      this.pendingSwapTimerId = null;
+      if (!this.running || !this.loopEnabled || !this.currentPlan || !this.context) {
+        return;
+      }
+
+      // Cancel future scheduled entries from the old plan at or after `swapAudioTime`
+      const remaining: typeof this.scheduledEntries = [];
+      for (const entry of this.scheduledEntries) {
+        if (entry.startAt >= swapAudioTime - 0.005) {
+          for (const tId of entry.timerIds) {
+            window.clearTimeout(tId);
+            this.timers.delete(tId);
+          }
+          entry.cleanup();
+        } else {
+          remaining.push(entry);
+        }
+      }
+      this.scheduledEntries = remaining;
+
+      if (this.cycleEndTimerId !== null) {
+        window.clearTimeout(this.cycleEndTimerId);
+        this.timers.delete(this.cycleEndTimerId);
+        this.cycleEndTimerId = null;
+      }
+
+      const activePlan = this.currentPlan;
+      const offsetInNewPlan = nextBarOffsetSec % Math.max(0.05, activePlan.totalDurationSec);
+      this.callbacks.onHotSwap?.();
+      this.scheduleCycleFromOffset(swapAudioTime, offsetInNewPlan);
+    }, msUntilSwap);
+
+    this.pendingSwapTimerId = timerId;
+    this.timers.add(timerId);
   }
 
   setControlValue(control: ControlDescriptor, rawValue: number): void {
@@ -307,6 +409,9 @@ export class WebAudioEngine {
       window.clearTimeout(timerId);
     }
     this.timers.clear();
+    this.cycleEndTimerId = null;
+    this.pendingSwapTimerId = null;
+    this.scheduledEntries = [];
 
     for (const node of this.activeNodes) {
       try {
@@ -489,7 +594,7 @@ export class WebAudioEngine {
       eventOut.gain.value = 1;
     }
     const panner = ctx.createStereoPanner();
-    const panCtrlName = event.controlRefs?.pan;
+      const panCtrlName = event.controlRefs?.pan;
     const livePan = this.resolveLiveNumber(event, 'pan', fx.pan ?? 0, true);
     panner.pan.setValueAtTime(Math.max(-1, Math.min(1, livePan)), startAt);
     eventOut.connect(panner);
@@ -503,6 +608,24 @@ export class WebAudioEngine {
       const bucket = this.getControlBucket(panCtrlName);
       bucket.panners.add(panner);
       cleanups.push(() => bucket.panners.delete(panner));
+    }
+
+    const volumeRamp = event.ramps?.find((r) => r.param === 'volume');
+    if (volumeRamp) {
+      const fromVol = Math.max(0, Math.min(1, volumeRamp.fromValue / 100));
+      const toVol = Math.max(0, Math.min(1, volumeRamp.toValue / 100));
+      const rampEnd = startAt + Math.max(0.02, volumeRamp.durationSec);
+      eventOut.gain.setValueAtTime(fromVol, startAt);
+      eventOut.gain.linearRampToValueAtTime(toVol, rampEnd);
+    }
+
+    const panRamp = event.ramps?.find((r) => r.param === 'pan');
+    if (panRamp) {
+      const fromPan = Math.max(-1, Math.min(1, panRamp.fromValue / 100));
+      const toPan = Math.max(-1, Math.min(1, panRamp.toValue / 100));
+      const rampEnd = startAt + Math.max(0.02, panRamp.durationSec);
+      panner.pan.setValueAtTime(fromPan, startAt);
+      panner.pan.linearRampToValueAtTime(toPan, rampEnd);
     }
 
     let inputNode: AudioNode = eventOut;
@@ -531,6 +654,15 @@ export class WebAudioEngine {
         );
         filter.frequency.setValueAtTime(startHz, startAt);
         filter.frequency.exponentialRampToValueAtTime(endHz, startAt + sweepSec);
+      }
+
+      const filterRamp = event.ramps?.find((r) => r.param === 'filter');
+      if (filterRamp) {
+        const startHz = Math.max(20, Math.min(20000, filterRamp.fromValue));
+        const endHz = Math.max(20, Math.min(20000, filterRamp.toValue));
+        const rampEnd = startAt + Math.max(0.02, filterRamp.durationSec);
+        filter.frequency.setValueAtTime(startHz, startAt);
+        filter.frequency.exponentialRampToValueAtTime(endHz, rampEnd);
       }
 
       if (fx.lfo && fx.lfo.depthHz > 0) {
@@ -602,6 +734,14 @@ export class WebAudioEngine {
 
       const delaySend = ctx.createGain();
       delaySend.gain.value = Math.max(0, Math.min(1, liveDelayMix));
+      const delayRamp = event.ramps?.find((r) => r.param === 'delay');
+      if (delayRamp) {
+        delaySend.gain.setValueAtTime(Math.max(0, Math.min(1, delayRamp.fromValue / 100)), startAt);
+        delaySend.gain.linearRampToValueAtTime(
+          Math.max(0, Math.min(1, delayRamp.toValue / 100)),
+          startAt + Math.max(0.02, delayRamp.durationSec),
+        );
+      }
       panner.connect(delaySend);
       delaySend.connect(bus.delayGate);
       cleanups.push(() => delaySend.disconnect());
@@ -618,6 +758,14 @@ export class WebAudioEngine {
     if (liveReverbMix > 0 || reverbMixCtrl) {
       const reverbSend = ctx.createGain();
       reverbSend.gain.value = Math.max(0, Math.min(1, liveReverbMix));
+      const reverbRamp = event.ramps?.find((r) => r.param === 'reverb');
+      if (reverbRamp) {
+        reverbSend.gain.setValueAtTime(Math.max(0, Math.min(1, reverbRamp.fromValue / 100)), startAt);
+        reverbSend.gain.linearRampToValueAtTime(
+          Math.max(0, Math.min(1, reverbRamp.toValue / 100)),
+          startAt + Math.max(0.02, reverbRamp.durationSec),
+        );
+      }
       panner.connect(reverbSend);
       reverbSend.connect(bus.reverbGate);
       cleanups.push(() => reverbSend.disconnect());
@@ -639,7 +787,59 @@ export class WebAudioEngine {
     };
   }
 
+  private resolveRuntimeEvent(event: ScheduledAudioEvent): ScheduledAudioEvent | null {
+    if (event.probability !== undefined && Math.random() * 100 >= event.probability) {
+      return null;
+    }
+
+    let resolved = event;
+
+    if (resolved.drumChoices && resolved.drumChoices.length > 0) {
+      const picked =
+        resolved.drumChoices[Math.floor(Math.random() * resolved.drumChoices.length)];
+      resolved = {
+        ...resolved,
+        drum: picked,
+        notes: [picked.toUpperCase()],
+      };
+    } else if (
+      resolved.noteChoices &&
+      resolved.frequencyChoices &&
+      resolved.noteChoices.length > 0
+    ) {
+      const idx = Math.floor(Math.random() * resolved.noteChoices.length);
+      resolved = {
+        ...resolved,
+        notes: [resolved.noteChoices[idx]],
+        frequencies: [resolved.frequencyChoices[idx]],
+      };
+    }
+
+    if (resolved.humanize) {
+      const deltaSec = ((Math.random() * 2 - 1) * resolved.humanize.timingMs) / 1000;
+      const velScale = 1 + (Math.random() * 2 - 1) * (resolved.humanize.velocityPercent / 100);
+      resolved = {
+        ...resolved,
+        startTimeSec: Math.max(0, resolved.startTimeSec + deltaSec),
+        volume:
+          resolved.volume <= 0
+            ? 0
+            : Math.max(0.01, Math.min(0.45, resolved.volume * velScale)),
+      };
+    }
+
+    return resolved;
+  }
+
   private scheduleCycle(): void {
+    if (!this.running || !this.currentPlan || !this.context || !this.masterGain) {
+      return;
+    }
+    const baseAudioTime = this.context.currentTime + 0.04;
+    this.scheduleCycleFromOffset(baseAudioTime, 0);
+  }
+
+  private scheduleCycleFromOffset(cycleOriginAudioTime: number, offsetSec: number): void {
     if (!this.running || !this.currentPlan || !this.context || !this.masterGain) {
       return;
     }
@@ -657,29 +857,45 @@ export class WebAudioEngine {
       return;
     }
 
-    const baseAudioTime = this.context.currentTime + 0.04;
-    this.cycleStartAudioTime = baseAudioTime;
+    const ctx = this.context;
+    this.scheduledEntries = [];
+    this.cycleStartAudioTime = cycleOriginAudioTime - offsetSec;
+    this.scheduledCycleDurationSec = plan.totalDurationSec;
 
-    for (const event of plan.events) {
-      const startAt = baseAudioTime + event.startTimeSec;
-      const delayMs = Math.max(0, event.startTimeSec * 1000);
-      const endDelayMs = Math.max(delayMs + 30, (event.startTimeSec + event.durationSec) * 1000);
+    for (const rawEvent of plan.events) {
+      if (rawEvent.startTimeSec < offsetSec - 0.005) {
+        continue;
+      }
+
+      const event = this.resolveRuntimeEvent(rawEvent);
+      if (!event) {
+        continue;
+      }
+
+      const relativeOffsetSec = Math.max(0, event.startTimeSec - offsetSec);
+      const startAt = cycleOriginAudioTime + relativeOffsetSec;
+      const delayMs = Math.max(0, (startAt - ctx.currentTime) * 1000);
+      const endDelayMs = Math.max(delayMs + 30, delayMs + event.durationSec * 1000);
       const trackBus = this.getTrackBus(event.trackName);
 
       // When volume is bound to a CONTROL, source outputs at unit full-scale (0.4) and eventOut.gain controls volume in real time
       const sourceVolume = event.controlRefs?.volume ? 0.4 : event.volume;
 
+      let chainCleanup: (() => void) | null = null;
       if (event.type === 'drum' && event.drum) {
         const chain = this.createEventChain(event, startAt, trackBus);
+        chainCleanup = chain.cleanup;
         this.scheduleDrum(event.drum, sourceVolume, startAt, chain.inputNode, chain.cleanup);
       } else if (event.type === 'sample' && event.sampleName) {
         const buffer = this.resolveSampleBuffer(event.sampleName);
         if (buffer) {
           const chain = this.createEventChain(event, startAt, trackBus);
+          chainCleanup = chain.cleanup;
           this.scheduleSample(event, buffer, sourceVolume, startAt, chain.inputNode, chain.cleanup);
         }
       } else if (event.type !== 'rest' && event.frequencies.length > 0) {
         const chain = this.createEventChain(event, startAt, trackBus);
+        chainCleanup = chain.cleanup;
         this.scheduleOscillators(event, sourceVolume, startAt, chain.inputNode, chain.cleanup);
       }
 
@@ -694,10 +910,22 @@ export class WebAudioEngine {
         this.callbacks.onEventEnd?.(event, cycleNumber);
       }, endDelayMs);
       this.timers.add(endTimer);
+
+      this.scheduledEntries.push({
+        startAt,
+        timerIds: [startTimer, endTimer],
+        cleanup: () => {
+          chainCleanup?.();
+        },
+      });
     }
 
     for (const log of plan.logs) {
-      const logDelayMs = Math.max(0, log.timestampOffsetSec * 1000);
+      if (log.timestampOffsetSec < offsetSec - 0.005) continue;
+      const logDelayMs = Math.max(
+        0,
+        (cycleOriginAudioTime + (log.timestampOffsetSec - offsetSec) - ctx.currentTime) * 1000,
+      );
       const logTimer = window.setTimeout(() => {
         if (!this.running) return;
         this.callbacks.onLogTrigger?.(log, cycleNumber);
@@ -705,8 +933,14 @@ export class WebAudioEngine {
       this.timers.add(logTimer);
     }
 
-    const cycleEndMs = Math.max(50, plan.totalDurationSec * 1000 + 25);
+    const remainingDurationSec = Math.max(0.05, plan.totalDurationSec - offsetSec);
+    const cycleEndMs = Math.max(
+      50,
+      (cycleOriginAudioTime + remainingDurationSec - ctx.currentTime) * 1000 + 25,
+    );
     const endTimer = window.setTimeout(() => {
+      this.timers.delete(endTimer);
+      this.cycleEndTimerId = null;
       if (!this.running) return;
 
       if (this.loopEnabled) {
@@ -717,6 +951,7 @@ export class WebAudioEngine {
       }
     }, cycleEndMs);
 
+    this.cycleEndTimerId = endTimer;
     this.timers.add(endTimer);
   }
 

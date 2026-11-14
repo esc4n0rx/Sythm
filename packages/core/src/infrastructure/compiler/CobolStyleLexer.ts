@@ -126,6 +126,18 @@ const KEYWORDS: Record<string, TokenType> = {
   PLUCK: TokenType.PLUCK,
   'SUB-808': TokenType.SUB_808,
   'PAD-WARM': TokenType.PAD_WARM,
+
+  MAYBE: TokenType.MAYBE,
+  CHOOSE: TokenType.CHOOSE,
+  ONE: TokenType.ONE,
+  OF: TokenType.OF,
+  HUMANIZE: TokenType.HUMANIZE,
+  MS: TokenType.MS,
+  VELOCITY: TokenType.VELOCITY,
+  RAMP: TokenType.RAMP,
+  AUTOMATE: TokenType.AUTOMATE,
+  PATTERN: TokenType.PATTERN,
+  SWING: TokenType.SWING,
 };
 
 const DRUM_LITERALS: Record<string, DrumType> = {
@@ -234,6 +246,30 @@ export class CobolStyleLexer implements ILexer {
         tokens.push({
           type: TokenType.PERCENT,
           lexeme: '%',
+          line: startLine,
+          column: startColumn,
+        });
+        lineHasTokens = true;
+        continue;
+      }
+
+      if (ch === '(') {
+        advance();
+        tokens.push({
+          type: TokenType.LPAREN,
+          lexeme: '(',
+          line: startLine,
+          column: startColumn,
+        });
+        lineHasTokens = true;
+        continue;
+      }
+
+      if (ch === ')') {
+        advance();
+        tokens.push({
+          type: TokenType.RPAREN,
+          lexeme: ')',
           line: startLine,
           column: startColumn,
         });
