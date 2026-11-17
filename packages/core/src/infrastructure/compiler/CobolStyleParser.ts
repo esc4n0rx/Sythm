@@ -336,7 +336,7 @@ export class CobolStyleParser implements IParser {
       this.match(TokenType.IS);
     }
 
-    let value = '';
+    let value: string;
     if (this.check(TokenType.STRING)) {
       const strToken = this.advance();
       value = String(strToken.literal ?? strToken.lexeme);
@@ -1532,7 +1532,7 @@ export class CobolStyleParser implements IParser {
           ? error.message
           : `Cifra de acorde inválida "${token.lexeme}".`,
       );
-      throw new Error('ParseError');
+      throw new Error('ParseError', { cause: error });
     }
   }
 
@@ -1749,7 +1749,7 @@ export class CobolStyleParser implements IParser {
 
   private parseSectionStatement(): StatementNode {
     const startToken = this.peek();
-    let sectionName = '';
+    let sectionName: string;
 
     if (this.match(TokenType.SECTION)) {
       const nameToken = this.peek();
@@ -1845,7 +1845,7 @@ export class CobolStyleParser implements IParser {
 
   private parsePrintStatement(): StatementNode {
     const printToken = this.advance();
-    let message = '';
+    let message: string;
 
     if (this.check(TokenType.STRING)) {
       const strToken = this.advance();

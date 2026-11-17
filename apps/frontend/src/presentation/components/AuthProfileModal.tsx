@@ -269,10 +269,10 @@ export function AuthProfileModal({
                 <input
                   type="password"
                   required
-                  minLength={6}
+                  minLength={8}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="mínimo 6 caracteres"
+                  placeholder="mínimo 8 caracteres"
                   className="w-full rounded-md border border-[#4a4d55] bg-[#18191d] px-3 py-2 text-xs text-white outline-none focus:border-[#0a84ff]"
                 />
               </div>

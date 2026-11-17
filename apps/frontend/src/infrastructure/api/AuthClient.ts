@@ -57,6 +57,16 @@ export function clearStoredSession(): void {
   }
 }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
   const token = getStoredToken();
   const headers: Record<string, string> = {
@@ -70,7 +80,7 @@ async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T>
   const res = await fetch(url, { ...options, headers });
   const data = (await res.json().catch(() => ({}))) as { error?: string } & T;
   if (!res.ok) {
-    throw new Error(data.error || `Erro HTTP ${res.status}`);
+    throw new ApiError(data.error || `Erro HTTP ${res.status}`, res.status);
   }
   return data;
 }
@@ -100,18 +110,33 @@ export async function loginUser(
   return data;
 }
 
+/**
+ * Valida a sessão e renova o token (`/api/auth/refresh`). Só encerra a sessão local
+ * quando o servidor responde 401; falhas de rede mantêm o usuário logado (modo offline).
+ */
 export async function fetchCurrentUser(): Promise<AuthUser | null> {
   if (!getStoredToken()) return null;
   try {
-    const data = await apiRequest<{ user: AuthUser }>('/api/auth/me');
-    const token = getStoredToken();
-    if (token && data.user) {
-      setStoredSession(token, data.user);
-    }
+    const data = await apiRequest<{ token: string; user: AuthUser }>('/api/auth/refresh', {
+      method: 'POST',
+    });
+    setStoredSession(data.token, data.user);
     return data.user;
-  } catch {
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      clearStoredSession();
+      return null;
+    }
+    return getStoredUser();
+  }
+}
+
+/** Revoga todos os tokens do usuário (logout em todos os dispositivos) e limpa a sessão local. */
+export async function logoutAllDevices(): Promise<void> {
+  try {
+    await apiRequest<{ ok: boolean }>('/api/auth/logout-all', { method: 'POST' });
+  } finally {
     clearStoredSession();
-    return null;
   }
 }
 

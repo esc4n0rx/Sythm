@@ -1,0 +1,20 @@
+# Postgres local para desenvolvimento: `docker compose up -d db`
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sythm
+      POSTGRES_PASSWORD: sythm
+      POSTGRES_DB: sythm
+    ports:
+      - '5432:5432'
+    volumes:
+      - sythm-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sythm']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  sythm-pgdata:

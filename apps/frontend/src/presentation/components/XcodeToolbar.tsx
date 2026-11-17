@@ -58,7 +58,7 @@ export function XcodeToolbar({
   bpm,
   waveform,
   activeEvent,
-  backendConnected,
+  backendConnected: _backendConnected,
   errorCount,
   isExportingWav = false,
   shareCopied = false,
