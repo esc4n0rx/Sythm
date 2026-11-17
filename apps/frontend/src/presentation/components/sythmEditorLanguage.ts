@@ -1,4 +1,4 @@
-import { type CompilationDiagnostic, ChordParser, NoteFrequency } from '@sythm/core';
+import { ChordParser, type LanguageContext, NoteFrequency, analyzeDocument } from '@sythm/core';
 
 export type HighlightTokenKind =
   | 'comment'
@@ -45,17 +45,8 @@ export interface AutocompleteResult {
 export interface AutocompleteContext {
   readonly definedSections?: readonly string[];
   readonly sampleNames?: readonly string[];
-}
-
-export interface HoverDoc {
-  readonly title: string;
-  readonly syntax: string;
-  readonly description: string;
-}
-
-export interface QuickFixAction {
-  readonly label: string;
-  readonly newLineText: string;
+  /** Projeto para resolver COPY: inclui SECTION/CONTROL de arquivos incluídos e sugere nomes de arquivo. */
+  readonly languageContext?: LanguageContext;
 }
 
 const DIVISION_WORDS = new Set([
@@ -103,6 +94,7 @@ const KEYWORD_WORDS = new Set([
   'TIMES',
   'END-REPEAT',
   'PERFORM',
+  'COPY',
   'PRINT',
   'DISPLAY',
   'FILTER',
@@ -412,6 +404,7 @@ const GENERAL_ITEMS: AutocompleteItem[] = [
     kind: 'snippet',
     detail: 'Sub-rotina reutilizável COBOL-style',
   },
+  { label: 'COPY "arquivo.sythm".', insertText: 'COPY "arquivo.sythm".', kind: 'command', detail: 'Inclui outro arquivo do projeto' },
   { label: 'PERFORM ... 2 TIMES.', insertText: 'PERFORM REFRAO 2 TIMES.', kind: 'command', detail: 'Chama uma SECTION definida' },
   {
     label: 'TRACK ... END-TRACK.',
@@ -477,22 +470,20 @@ const GENERAL_ITEMS: AutocompleteItem[] = [
   ...COMMON_NOTES,
 ];
 
-function extractDeclaredControls(code: string): AutocompleteItem[] {
-  const regex = /^\s*(?:DEFINE\s+(?:(?:CONTROL|SLIDER)\s+)?)?(?:CONTROL|SLIDER)\s+([A-Za-z][A-Za-z0-9_-]*)/gim;
-  const found = new Map<string, AutocompleteItem>();
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(code)) !== null) {
-    const name = match[1].toUpperCase();
-    if (!found.has(name)) {
-      found.set(name, {
-        label: name,
-        insertText: name,
-        kind: 'keyword',
-        detail: `Variável CONTROL (${name})`,
-      });
-    }
-  }
-  return Array.from(found.values());
+function extractDeclaredControls(code: string, context?: LanguageContext): AutocompleteItem[] {
+  const model = analyzeDocument(code, context);
+  return [...model.controls.values()]
+    .filter((c) => c.definitions.length > 0)
+    .map((c) => {
+      const spec = c.spec;
+      const range = spec && spec.min !== undefined && spec.max !== undefined ? ` ${spec.min}–${spec.max}` : '';
+      return {
+        label: c.name,
+        insertText: c.name,
+        kind: 'keyword' as const,
+        detail: `CONTROL${range} · ${c.definitions[0]!.file ? c.definitions[0]!.file : `linha ${c.definitions[0]!.line}`}`,
+      };
+    });
 }
 
 function getContextItems(
@@ -648,17 +639,8 @@ function getContextItems(
   return GENERAL_ITEMS;
 }
 
-function extractDeclaredSections(code: string): string[] {
-  const seen = new Set<string>();
-  const regex = /^\s*(?:([A-Za-z0-9_-]+)\s+SECTION|SECTION\s+([A-Za-z0-9_-]+))\s*\./gim;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(code)) !== null) {
-    const raw = (match[1] ?? match[2] ?? '').toUpperCase();
-    if (raw && raw !== 'PROCEDURES' && raw !== 'PROCEDURE' && raw !== 'PATTERNS') {
-      seen.add(raw);
-    }
-  }
-  return Array.from(seen);
+function extractDeclaredSections(code: string, context?: LanguageContext): string[] {
+  return [...analyzeDocument(code, context).sections.values()].filter((x) => x.definitions.length > 0).map((x) => x.name);
 }
 
 const COMMON_CHORD_ITEMS: AutocompleteItem[] = [
@@ -711,9 +693,9 @@ export function getAutocompleteSuggestions(
     return null;
   }
 
-  const declaredControls = extractDeclaredControls(code);
+  const declaredControls = extractDeclaredControls(code, extraContext?.languageContext);
   const sectionNames = Array.from(
-    new Set([...(extraContext?.definedSections ?? []), ...extractDeclaredSections(code)]),
+    new Set([...(extraContext?.definedSections ?? []), ...extractDeclaredSections(code, extraContext?.languageContext)]),
   );
   const sectionItems: AutocompleteItem[] = sectionNames.map((name) => ({
     label: name,
@@ -730,7 +712,17 @@ export function getAutocompleteSuggestions(
 
   const upperBeforeWord = lineBeforeWord.toUpperCase();
   let contextItems: AutocompleteItem[];
-  if (/\bPERFORM\s*$/.test(upperBeforeWord) && sectionItems.length > 0) {
+  // Depois de `COPY "` a aspa de abertura já está no texto: não repetir ao inserir.
+  const openQuote = /"$/.test(lineBeforeWord);
+  const copyItems: AutocompleteItem[] = (extraContext?.languageContext?.copyCandidates ?? []).map((name) => ({
+    label: openQuote ? name : `"${name}"`,
+    insertText: openQuote ? `${name}".` : `"${name}".`,
+    kind: 'snippet' as const,
+    detail: 'Arquivo do projeto',
+  }));
+  if (/^\s*COPY\s*"?$/.test(upperBeforeWord) && copyItems.length > 0) {
+    contextItems = copyItems;
+  } else if (/\bPERFORM\s*$/.test(upperBeforeWord) && sectionItems.length > 0) {
     contextItems = sectionItems;
   } else if (/\bPLAY\s+SAMPLE\s*$/.test(upperBeforeWord) && sampleItems.length > 0) {
     contextItems = sampleItems;
@@ -745,6 +737,7 @@ export function getAutocompleteSuggestions(
     ...declaredControls,
     ...sectionItems,
     ...sampleItems,
+    ...copyItems,
     ...PHASE1_GENERAL_ITEMS,
     ...COMMON_CHORD_ITEMS,
     ...GENERAL_ITEMS,
@@ -789,115 +782,4 @@ export function getAutocompleteSuggestions(
     columnIndex: currentLineBeforeCursor.length,
     items: finalItems.slice(0, 10),
   };
-}
-
-const HOVER_DOCS: Record<string, HoverDoc> = {
-  PERFORM: {
-    title: 'PERFORM',
-    syntax: 'PERFORM <SECTION> [<N> TIMES].',
-    description: 'Executa uma sub-rotina declarada na PROCEDURES DIVISION.',
-  },
-  ARPEGGIATE: {
-    title: 'ARPEGGIATE',
-    syntax: 'ARPEGGIATE <ACORDE> UP | DOWN | UP-DOWN FOR <N> BEATS.',
-    description: 'Quebra um acorde ou lista de notas em sequência arpejada.',
-  },
-  EUCLIDEAN: {
-    title: 'PLAY EUCLIDEAN',
-    syntax: 'PLAY EUCLIDEAN <DRUM|NOTA> <PULSOS> IN <PASSOS> FOR <N> BEATS.',
-    description: 'Gera ritmo euclidiano (algoritmo de Bjorklund) distribuindo pulsos uniformemente.',
-  },
-  MAYBE: {
-    title: 'MAYBE',
-    syntax: 'MAYBE <0..100> PERCENT <COMANDO>.',
-    description: 'Executa o comando de forma probabilística a cada ciclo do loop.',
-  },
-  CHOOSE: {
-    title: 'CHOOSE ONE OF',
-    syntax: 'PLAY CHOOSE ONE OF (C4, E4, G4) FOR <N> BEATS.',
-    description: 'Escolhe aleatoriamente uma nota ou tambor da lista a cada ciclo.',
-  },
-  PATTERN: {
-    title: 'PATTERN',
-    syntax: 'PATTERN <DRUM|NOTA> IS "x..x..x." [STEP <N> BEATS | FOR <N> BEATS].',
-    description: 'Step sequencer inline: x = normal, X/* = acento, o = ghost, ./- = pausa.',
-  },
-  RAMP: {
-    title: 'RAMP / AUTOMATE',
-    syntax: 'RAMP <FILTER|VOLUME|PAN|REVERB|DELAY|TEMPO> FROM <A> TO <B> OVER <N> BEATS.',
-    description: 'Automatiza um parâmetro continuamente ao longo de N beats.',
-  },
-  AUTOMATE: {
-    title: 'AUTOMATE / RAMP',
-    syntax: 'AUTOMATE <PARAM> FROM <A> TO <B> OVER <N> BEATS.',
-    description: 'Alias para RAMP: cria curva temporal de automação.',
-  },
-  HUMANIZE: {
-    title: 'HUMANIZE',
-    syntax: 'HUMANIZE <N> MS [VELOCITY <%> PERCENT]. | HUMANIZE OFF.',
-    description: 'Adiciona micro-variações orgânicas de tempo e volume.',
-  },
-  SWING: {
-    title: 'SWING',
-    syntax: 'SWING IS <0..100> PERCENT. | SWING OFF.',
-    description: 'Atrasa os contratempos para criar groove/balanço.',
-  },
-  CONTROL: {
-    title: 'CONTROL (Slider)',
-    syntax: 'CONTROL <NOME> IS SLIDER <DEF> FROM <MIN> TO <MAX>.',
-    description: 'Cria um slider interativo em tempo real no editor e no Track Mixer.',
-  },
-  SAMPLE: {
-    title: 'PLAY SAMPLE',
-    syntax: 'PLAY SAMPLE "<arquivo>" [RATE <N>] [OFFSET <S> SEC] FOR <N> BEATS.',
-    description: 'Toca um áudio importado do IndexedDB sincronizado com os efeitos da track.',
-  },
-};
-
-export function getHoverDoc(word: string): HoverDoc | null {
-  const key = word.trim().toUpperCase();
-  if (!key) return null;
-  return HOVER_DOCS[key] ?? null;
-}
-
-export function getQuickFixForDiagnostic(
-  diag: CompilationDiagnostic,
-  lineText: string,
-): QuickFixAction | null {
-  const msg = diag.message.toLowerCase();
-  const trimmed = lineText.trimEnd();
-
-  if (
-    (msg.includes('ponto final') || msg.includes('esperado "."') || msg.includes('"."')) &&
-    trimmed.length > 0 &&
-    !trimmed.endsWith('.')
-  ) {
-    return {
-      label: 'Adicionar "." no final da linha',
-      newLineText: `${trimmed}.`,
-    };
-  }
-
-  if (msg.includes('end-track')) {
-    return {
-      label: 'Adicionar "END-TRACK."',
-      newLineText: `${lineText}\n  END-TRACK.`,
-    };
-  }
-
-  if (msg.includes('end-repeat')) {
-    return {
-      label: 'Adicionar "END-REPEAT."',
-      newLineText: `${lineText}\n  END-REPEAT.`,
-    };
-  }
-
-  if (msg.includes('end-section')) {
-    return {
-      label: 'Adicionar "END-SECTION."',
-      newLineText: `${lineText}\n  END-SECTION.`,
-    };
-  }
-
-  return null;
 }

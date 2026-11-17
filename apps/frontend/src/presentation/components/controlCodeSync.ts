@@ -33,6 +33,8 @@ export function updateControlValueInCode(
   control: ControlDescriptor,
   newValue: number,
 ): string {
+  // Controle declarado em arquivo incluído por COPY: a linha aqui é o COPY, não o slider.
+  if (control.sourceFile) return code;
   const lines = code.split('\n');
   const lineIndex = control.declarationLine - 1;
   if (lineIndex < 0 || lineIndex >= lines.length) {

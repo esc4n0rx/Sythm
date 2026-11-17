@@ -11,6 +11,7 @@ import {
   compileSythmCode,
 } from '@sythm/core';
 import { checkBackendHealth, compileWithBackendOrFallback } from './infrastructure/api/CompilerClient';
+import { createProjectCopyContext } from './infrastructure/storage/copyResolver';
 import {
   type AuthUser,
   fetchCloudWorkspace,
@@ -147,6 +148,20 @@ export function App() {
   const filename = activeFile.name;
   const code = activeFile.code;
 
+  // COPY "arquivo". resolve entre os arquivos do projeto (ProjectStorage).
+  const copyContext = useMemo(
+    () => createProjectCopyContext(workspace.files, workspace.folders, activeFile),
+    [workspace.files, workspace.folders, activeFile],
+  );
+  const copyContextRef = useRef(copyContext);
+  copyContextRef.current = copyContext;
+  const [revealRequest, setRevealRequest] = useState<{
+    fileName: string;
+    start: number;
+    end: number;
+    nonce: number;
+  } | null>(null);
+
   const setCode = useCallback(
     (next: string | ((prev: string) => string)) => {
       setWorkspace((prev) => {
@@ -191,7 +206,7 @@ export function App() {
   const [soloedTracks, setSoloedTracks] = useState<Set<string>>(() => new Set());
   const [controlValues, setControlValues] = useState<Record<string, number>>({});
 
-  const livePreview = useMemo(() => compileSythmCode(code), [code]);
+  const livePreview = useMemo(() => compileSythmCode(code, copyContext), [code, copyContext]);
   const lastValidPreviewRef = useRef<{ tracks: ExecutionPlan['tracks']; controls: ControlDescriptor[] }>({
     tracks: [],
     controls: [],
@@ -376,7 +391,7 @@ export function App() {
   const runCompile = useCallback(
     async (playAfterCompile: boolean, codeOverride?: string) => {
       const targetCode = codeOverride ?? code;
-      const result = await compileWithBackendOrFallback(targetCode);
+      const result = await compileWithBackendOrFallback(targetCode, copyContextRef.current);
       setBackendConnected(result.source === 'backend');
       setTokens(result.tokens);
       setAst(result.ast);
@@ -525,6 +540,22 @@ export function App() {
     [appendConsole, resetPlaybackState],
   );
 
+  /** F12 / Ctrl+Clique em COPY ou em símbolo declarado num arquivo incluído: abre o arquivo e posiciona o cursor. */
+  const handleOpenFileByName = useCallback(
+    (fileName: string, range?: { start: number; end: number }) => {
+      const target = workspace.files.find((f) => f.name.toLowerCase() === fileName.toLowerCase());
+      if (!target) {
+        appendConsole('error', `Arquivo "${fileName}" não encontrado no projeto.`);
+        return;
+      }
+      handleSelectFile(target);
+      if (range) {
+        setRevealRequest({ fileName: target.name, start: range.start, end: range.end, nonce: Date.now() });
+      }
+    },
+    [appendConsole, handleSelectFile, workspace.files],
+  );
+
   const handleToggleFolder = useCallback((folderId: string) => {
     setWorkspace((prev) => toggleFolderExpanded(prev, folderId));
   }, []);
@@ -598,7 +629,7 @@ export function App() {
   }, [appendConsole, resetPlaybackState]);
 
   const handleExportWav = useCallback(async () => {
-    const compiled = compileSythmCode(codeRef.current);
+    const compiled = compileSythmCode(codeRef.current, copyContextRef.current);
     if (!compiled.success || !compiled.plan) {
       setDiagnostics(compiled.diagnostics);
       setStatus('error');
@@ -748,7 +779,7 @@ export function App() {
         codeRef.current = nextCode;
         setCode(nextCode);
 
-        const updated = compileSythmCode(nextCode);
+        const updated = compileSythmCode(nextCode, copyContextRef.current);
         if (updated.success && updated.plan) {
           setPlan(updated.plan);
           setAst(updated.ast);
@@ -1013,6 +1044,9 @@ export function App() {
             controls={activeControls}
             controlValues={controlValues}
             definedSections={visualizerPlan?.definedSections}
+            languageContext={copyContext}
+            onOpenFile={handleOpenFileByName}
+            revealRequest={revealRequest}
             sampleNames={samples.map((s) => s.name)}
             fontSize={settings.editorFontSize}
             showLineNumbers={settings.showLineNumbers}

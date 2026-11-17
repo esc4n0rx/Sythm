@@ -48,6 +48,8 @@ export interface ControlDescriptor {
   readonly step: number;
   readonly unit: string;
   readonly declarationLine: number;
+  /** Arquivo incluído por `COPY` que declara este controle (`declarationLine` aponta para o COPY). */
+  readonly sourceFile?: string;
   readonly usageLines: number[];
   readonly bindings: ControlBinding[];
 }

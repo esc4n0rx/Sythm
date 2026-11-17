@@ -155,6 +155,12 @@ const DRUM_LITERALS: Record<string, DrumType> = {
   PERC: 'perc',
 };
 
+/** `true` se a palavra é reservada (palavra-chave ou nome de tambor) e não pode ser usada como nome de SECTION/CONTROL. */
+export function isReservedWord(word: string): boolean {
+  const upper = word.toUpperCase();
+  return Object.prototype.hasOwnProperty.call(KEYWORDS, upper) || Object.prototype.hasOwnProperty.call(DRUM_LITERALS, upper);
+}
+
 export class CobolStyleLexer implements ILexer {
   tokenize(source: string): LexerResult {
     const tokens: Token[] = [];

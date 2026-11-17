@@ -1,16 +1,29 @@
-import { AlertCircle, Sparkles, Wrench } from 'lucide-react';
+import { AlertCircle, Sparkles, Wrench, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { CompilationDiagnostic, ControlDescriptor } from '@sythm/core';
+import {
+  type CodeAction,
+  type CompilationDiagnostic,
+  type ControlDescriptor,
+  type HoverInfo,
+  type LanguageContext,
+  analyzeDocument,
+  applyEdits,
+  getCodeActions,
+  getDefinition,
+  getHover,
+  getReferences,
+  mergeDiagnostics,
+  positionAt,
+  prepareRename,
+  renameSymbol,
+} from '@sythm/core';
 import { ControlSlider } from './ControlSlider';
 import {
   type AutocompleteItem,
   type AutocompleteKind,
   type AutocompleteResult,
   type HighlightTokenKind,
-  type HoverDoc,
   getAutocompleteSuggestions,
-  getHoverDoc,
-  getQuickFixForDiagnostic,
   tokenizeLineForHighlight,
 } from './sythmEditorLanguage';
 
@@ -23,6 +36,12 @@ interface CodeEditorProps {
   controlValues: Readonly<Record<string, number>>;
   definedSections?: readonly string[];
   sampleNames?: readonly string[];
+  /** Projeto para resolver `COPY` (símbolos de arquivos incluídos, diagnósticos de arquivo inexistente). */
+  languageContext?: LanguageContext;
+  /** Abre outro arquivo do projeto (F12 em COPY ou em símbolo declarado num arquivo incluído). */
+  onOpenFile?: (fileName: string, range?: { start: number; end: number }) => void;
+  /** Pedido de posicionar o cursor depois de abrir o arquivo (muda a cada pedido, via `nonce`). */
+  revealRequest?: { fileName: string; start: number; end: number; nonce: number } | null;
   fontSize?: number;
   showLineNumbers?: boolean;
   enableAutocomplete?: boolean;
@@ -65,6 +84,9 @@ export function CodeEditor({
   controlValues,
   definedSections,
   sampleNames,
+  languageContext,
+  onOpenFile,
+  revealRequest,
   fontSize = 13,
   showLineNumbers = true,
   enableAutocomplete = true,
@@ -85,9 +107,31 @@ export function CodeEditor({
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [scrollPos, setScrollPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [followPlayhead, setFollowPlayhead] = useState<boolean>(true);
-  const [hoverDoc, setHoverDoc] = useState<{ doc: HoverDoc; top: number; left: number } | null>(null);
+  const [hoverDoc, setHoverDoc] = useState<{ doc: HoverInfo; top: number; left: number } | null>(null);
+  const [cursorOffset, setCursorOffset] = useState<number>(0);
+  const [renameState, setRenameState] = useState<{
+    offset: number;
+    value: string;
+    error: string | null;
+  } | null>(null);
+  const [referencesView, setReferencesView] = useState<{
+    name: string;
+    items: Array<{ line: number; start: number; end: number; text: string; file?: string }>;
+  } | null>(null);
 
   const lines = useMemo(() => code.split('\n'), [code]);
+
+  // Serviço de linguagem (símbolos, hover, definição, rename, quick-fixes), sempre sobre o texto atual.
+  const model = useMemo(() => analyzeDocument(code, languageContext), [code, languageContext]);
+  const allDiagnostics = useMemo(
+    () => mergeDiagnostics(code, diagnostics, languageContext),
+    [code, diagnostics, languageContext],
+  );
+
+  const trackCursor = (offset: number) => {
+    setCursorOffset(offset);
+    onCursorChange?.(offset);
+  };
 
   const highlightedLines = useMemo(
     () => lines.map((line) => tokenizeLineForHighlight(line)),
@@ -116,7 +160,7 @@ export function CodeEditor({
 
   const errorByLine = useMemo(() => {
     const map = new Map<number, CompilationDiagnostic[]>();
-    for (const diag of diagnostics) {
+    for (const diag of allDiagnostics) {
       if (diag.severity === 'error') {
         const list = map.get(diag.line) ?? [];
         list.push(diag);
@@ -124,12 +168,14 @@ export function CodeEditor({
       }
     }
     return map;
-  }, [diagnostics]);
+  }, [allDiagnostics]);
 
   useEffect(() => {
     setAutocomplete(null);
     setSelectedIndex(0);
     setHoverDoc(null);
+    setRenameState(null);
+    setReferencesView(null);
   }, [filename]);
 
   // Playhead -> Editor auto-scroll synchronization
@@ -148,24 +194,89 @@ export function CodeEditor({
     }
   }, [activeLines, followPlayhead, lineHeightPx]);
 
-  const quickFixItem = useMemo(() => {
-    for (const diag of diagnostics) {
-      if (diag.severity !== 'error') continue;
-      const lineIdx = diag.line - 1;
-      if (lineIdx < 0 || lineIdx >= lines.length) continue;
-      const fix = getQuickFixForDiagnostic(diag, lines[lineIdx]);
-      if (fix) {
-        return { diag, fix };
-      }
+  // Quick-fix: prioriza o erro na linha do cursor; senão, o primeiro erro corrigível.
+  const quickFix = useMemo(() => {
+    const cursorLine = positionAt(model, cursorOffset).line;
+    const errors = allDiagnostics.filter((d) => d.severity === 'error');
+    const candidates = [...errors.filter((d) => d.line === cursorLine), ...errors];
+    for (const diag of candidates) {
+      const actions = getCodeActions(model, diag);
+      if (actions.length > 0) return { diag, actions };
     }
     return null;
-  }, [diagnostics, lines]);
+  }, [allDiagnostics, model, cursorOffset]);
 
-  const applyQuickFix = () => {
-    if (!quickFixItem) return;
-    const nextLines = [...lines];
-    nextLines[quickFixItem.diag.line - 1] = quickFixItem.fix.newLineText;
-    onChange(nextLines.join('\n'));
+  const applyCodeAction = (action: CodeAction) => {
+    onChange(applyEdits(code, action.edits));
+  };
+
+  const revealRange = (start: number, end: number) => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.focus();
+    ta.setSelectionRange(start, end);
+    const line = positionAt(model, start).line;
+    const targetTop = (line - 1) * lineHeightPx;
+    if (targetTop < ta.scrollTop || targetTop > ta.scrollTop + ta.clientHeight - lineHeightPx * 3) {
+      ta.scrollTo({ top: Math.max(0, targetTop - ta.clientHeight * 0.35), behavior: 'smooth' });
+    }
+    trackCursor(start);
+  };
+
+  const goToDefinition = (offset: number): boolean => {
+    const def = getDefinition(model, offset);
+    if (!def) return false;
+    if (def.file) {
+      // Declarado em outro arquivo do projeto (COPY): abre o arquivo.
+      if (!onOpenFile) return false;
+      onOpenFile(def.file, def.kind === 'file' ? undefined : def.range);
+      return true;
+    }
+    revealRange(def.range.start, def.range.end);
+    return true;
+  };
+
+  // Depois de abrir um arquivo a partir de outro, posiciona o cursor na declaração.
+  useEffect(() => {
+    if (!revealRequest || revealRequest.fileName !== filename) return;
+    const id = window.requestAnimationFrame(() => revealRange(revealRequest.start, revealRequest.end));
+    return () => window.cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealRequest?.nonce, filename]);
+
+  const showReferences = (offset: number) => {
+    const refs = getReferences(model, offset, true);
+    if (refs.length === 0) return;
+    setRenameState(null);
+    setReferencesView({
+      name: refs[0]!.name,
+      items: refs.map((r) => ({
+        line: r.line,
+        start: r.range.start,
+        end: r.range.end,
+        file: r.file,
+        text: r.file ? `${r.file}:${r.line}` : (lines[r.line - 1] ?? '').trim(),
+      })),
+    });
+  };
+
+  const startRename = (offset: number) => {
+    const target = prepareRename(model, offset);
+    if (!target) return;
+    setReferencesView(null);
+    setRenameState({ offset, value: target.placeholder, error: null });
+  };
+
+  const submitRename = () => {
+    if (!renameState) return;
+    const result = renameSymbol(model, renameState.offset, renameState.value);
+    if (!result.ok) {
+      setRenameState({ ...renameState, error: result.error });
+      return;
+    }
+    onChange(applyEdits(code, result.edits));
+    setRenameState(null);
+    textareaRef.current?.focus();
   };
 
   const syncScroll = () => {
@@ -189,6 +300,7 @@ export function CodeEditor({
     const result = getAutocompleteSuggestions(nextCode, cursorIndex, forceOpen, {
       definedSections,
       sampleNames,
+      languageContext,
     });
     setAutocomplete(result);
     setSelectedIndex(0);
@@ -218,7 +330,7 @@ export function CodeEditor({
   const handleChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextCode = event.target.value;
     const cursor = event.target.selectionStart ?? nextCode.length;
-    onCursorChange?.(cursor);
+    trackCursor(cursor);
     onChange(nextCode);
     refreshAutocomplete(nextCode, cursor, false);
   };
@@ -240,17 +352,7 @@ export function CodeEditor({
       if (hoverDoc) setHoverDoc(null);
       return;
     }
-    const isWord = (c: string) => /[A-Za-z0-9_-]/.test(c);
-    if (!isWord(lineText[colIdx])) {
-      if (hoverDoc) setHoverDoc(null);
-      return;
-    }
-    let start = colIdx;
-    let end = colIdx;
-    while (start > 0 && isWord(lineText[start - 1])) start -= 1;
-    while (end < lineText.length && isWord(lineText[end])) end += 1;
-    const word = lineText.slice(start, end);
-    const doc = getHoverDoc(word);
+    const doc = getHover(model, (model.lineStarts[lineIdx] ?? 0) + colIdx);
     if (!doc) {
       if (hoverDoc) setHoverDoc(null);
       return;
@@ -265,6 +367,26 @@ export function CodeEditor({
       event.preventDefault();
       setAutocomplete(null);
       onRunShortcut();
+      return;
+    }
+
+    if (event.key === 'F12') {
+      event.preventDefault();
+      const offset = event.currentTarget.selectionStart ?? 0;
+      if (event.shiftKey) showReferences(offset);
+      else goToDefinition(offset);
+      return;
+    }
+
+    if (event.key === 'F2') {
+      event.preventDefault();
+      startRename(event.currentTarget.selectionStart ?? 0);
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key === '.') {
+      event.preventDefault();
+      if (quickFix) applyCodeAction(quickFix.actions[0]!);
       return;
     }
 
@@ -336,7 +458,7 @@ export function CodeEditor({
     const nextCode = `${code.slice(0, insertPos)}${insertion}${code.slice(insertPos)}`;
     const nextCursor = insertPos + insertion.length;
     onChange(nextCode);
-    onCursorChange?.(nextCursor);
+    trackCursor(nextCursor);
     window.requestAnimationFrame(() => {
       if (textareaRef.current) {
         textareaRef.current.focus();
@@ -377,29 +499,34 @@ export function CodeEditor({
             <span>Seguir Playhead</span>
           </button>
           <span className="text-[11px] opacity-80">
-            Ctrl+Space Auto Complete · Ctrl+Enter Play
+            Ctrl+Space Completar · F12 Definição · F2 Renomear · Ctrl+. Quick-Fix · Ctrl+Enter Play
           </span>
         </div>
       </div>
 
-      {/* Quick-Fix Banner for common syntax errors */}
-      {quickFixItem && (
+      {/* Quick-Fix Banner: erros com correção automática disponível */}
+      {quickFix && (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#ff453a]/30 bg-[#ff453a]/10 px-3 py-1.5 text-xs text-[#ffb4ab]">
           <div className="flex min-w-0 items-center gap-2">
             <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#ff6961]" />
             <span className="truncate">
-              <strong className="font-mono-code">L{quickFixItem.diag.line}:</strong>{' '}
-              {quickFixItem.diag.message}
+              <strong className="font-mono-code">L{quickFix.diag.line}:</strong> {quickFix.diag.message}
             </span>
           </div>
-          <button
-            type="button"
-            onClick={applyQuickFix}
-            className="flex shrink-0 items-center gap-1 rounded bg-[#ff453a]/25 px-2.5 py-0.5 text-[11px] font-medium text-white transition hover:bg-[#ff453a]/40"
-          >
-            <Wrench className="h-3 w-3" />
-            <span>Quick-Fix: {quickFixItem.fix.label}</span>
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {quickFix.actions.slice(0, 3).map((action, idx) => (
+              <button
+                key={action.title}
+                type="button"
+                onClick={() => applyCodeAction(action)}
+                title={idx === 0 ? 'Ctrl+.' : undefined}
+                className="flex items-center gap-1 rounded bg-[#ff453a]/25 px-2.5 py-0.5 text-[11px] font-medium text-white transition hover:bg-[#ff453a]/40"
+              >
+                <Wrench className="h-3 w-3" />
+                <span>{action.title}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -497,10 +624,12 @@ export function CodeEditor({
               }
             }}
             onDrop={handleDrop}
-            onSelect={(e) => onCursorChange?.(e.currentTarget.selectionStart ?? 0)}
+            onSelect={(e) => trackCursor(e.currentTarget.selectionStart ?? 0)}
             onClick={(e) => {
-              onCursorChange?.(e.currentTarget.selectionStart ?? 0);
+              const offset = e.currentTarget.selectionStart ?? 0;
+              trackCursor(offset);
               setAutocomplete(null);
+              if ((e.ctrlKey || e.metaKey) && goToDefinition(offset)) e.preventDefault();
             }}
             onBlur={() => {
               // Small delay so mousedown/click on autocomplete item fires first
@@ -550,6 +679,73 @@ export function CodeEditor({
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Rename (F2) */}
+          {renameState && (
+            <div className="absolute top-2 right-4 z-40 w-72 rounded-lg border border-[#4a4d55] bg-[#25262b] p-2.5 text-xs shadow-2xl">
+              <label htmlFor={`${listboxId}-rename`} className="mb-1 block text-[11px] text-[#aeaeb2]">
+                Renomear em todo o arquivo
+              </label>
+              <input
+                id={`${listboxId}-rename`}
+                autoFocus
+                value={renameState.value}
+                onChange={(e) => setRenameState({ ...renameState, value: e.target.value, error: null })}
+                onFocus={(e) => e.currentTarget.select()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submitRename();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setRenameState(null);
+                    textareaRef.current?.focus();
+                  }
+                }}
+                className="w-full rounded border border-[#4a4d55] bg-[#18191d] px-2 py-1 font-mono-code text-xs text-white outline-none focus:border-[#0a84ff]"
+              />
+              {renameState.error && <p className="mt-1 text-[11px] text-[#ff8a80]">{renameState.error}</p>}
+              <p className="mt-1 text-[10px] text-[#8e8e93]">Enter aplicar · Esc cancelar</p>
+            </div>
+          )}
+
+          {/* Referências (Shift+F12) */}
+          {referencesView && (
+            <div className="absolute top-2 right-4 z-40 w-80 overflow-hidden rounded-lg border border-[#4a4d55] bg-[#25262b] text-xs shadow-2xl">
+              <div className="flex items-center justify-between border-b border-[#3d3f45] px-3 py-1.5">
+                <span className="font-mono-code text-[11px] font-semibold text-[#64d2ff]">
+                  {referencesView.name} · {referencesView.items.length} ocorrência
+                  {referencesView.items.length === 1 ? '' : 's'}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Fechar referências"
+                  onClick={() => setReferencesView(null)}
+                  className="text-[#8e8e93] hover:text-white"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <ul className="xcode-scroll max-h-56 overflow-y-auto py-1">
+                {referencesView.items.map((item) => (
+                  <li key={item.start}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (item.file) onOpenFile?.(item.file, { start: item.start, end: item.end });
+                        else revealRange(item.start, item.end);
+                        setReferencesView(null);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-[#32343b]"
+                    >
+                      <span className="w-8 shrink-0 text-right font-mono-code text-[#8e8e93]">{item.line}</span>
+                      <span className="truncate font-mono-code text-[#e5e5ea]">{item.text}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

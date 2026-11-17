@@ -44,7 +44,7 @@ O **Sythm** transforma a composição musical e o *live coding* em código legí
   - Travamento tonal por escala (`SCALE IS C MINOR`, `MAJOR`, `PENTATONIC`, `DORIAN`, `BLUES`, etc.).
   - Arpejador inteligente (`ARPEGGIATE <ACORDE> UP | DOWN | UP-DOWN | RANDOM FOR <N> BEATS.`).
   - Gerador matemático de **Ritmos Euclidianos** (`PLAY EUCLIDEAN <ALVO> <PULSOS> IN <PASSOS> FOR <N> BEATS.`).
-- **Modularidade**: Loops `REPEAT <N> TIMES ... END-REPEAT.` e chamadas reutilizáveis `PERFORM <SECTION> <N> TIMES.`, além de diagnóstico léxico/sintático com linha e coluna e logs musicais com `PRINT "..."` / `DISPLAY "..."`.
+- **Modularidade**: Loops `REPEAT <N> TIMES ... END-REPEAT.` e chamadas reutilizáveis `PERFORM <SECTION> <N> TIMES.`, `COPY "arquivo.sythm".` para incluir outros arquivos do projeto ([docs/copy.md](./docs/copy.md)), além de diagnóstico léxico/sintático com linha e coluna e logs musicais com `PRINT "..."` / `DISPLAY "..."`.
 
 ### Motor de Síntese Web Audio & Studio (`@sythm/frontend`)
 - **4 Formas de Onda Analógicas**: `SINE`, `TRIANGLE`, `SQUARE`, `SAW`.
@@ -72,6 +72,7 @@ O **Sythm** transforma a composição musical e o *live coding* em código legí
 - **Exportação Offline `.WAV`**: Renderização estéreo limpa fora do tempo real via `OfflineAudioContext` (`WavExporter`).
 - **Gerenciamento de Projetos**: Sidebar com criação de arquivos `.sythm`, pastas virtuais e compartilhamento compacto via URL.
 - **Temas & Customização Estilo VS Code**: 7 temas integrados (*Xcode Dark*, *VS Code Dark+*, *Dracula*, *Monokai Pro*, *Cyberpunk Neon*, *GitHub Dark*, *Solarized Ocean*) mais criador de tema personalizado e preferências de editor.
+- **Serviço de Linguagem no Editor**: autocomplete de SECTION/CONTROL, hover com documentação, ir para definição (`F12`/`Ctrl+Clique`), referências (`Shift+F12`), renomear (`F2`), diagnósticos semânticos e quick-fixes (`Ctrl+.`). Veja [docs/language-service.md](./docs/language-service.md).
 - **Sythm Tutorial Integrado**: Manual em formato de livro paginado com **12 capítulos**, sumário navegável, inserção de trechos no cursor e carregamento de exemplos completos no editor.
 
 ---
@@ -130,6 +131,7 @@ Sythm/
 
 - **Node.js** `>= 20.0.0`
 - **pnpm** `>= 9.0.0`
+- **PostgreSQL** `>= 14` para o backend (local via `docker compose up -d db`, ou qualquer serviço gerenciado como o [pgx.dev](https://pgx.dev/)). Veja [docs/backend.md](./docs/backend.md).
 
 ### Instalação e Execução
 
@@ -141,7 +143,12 @@ cd Sythm
 # 2. Instale as dependências do monorepo
 pnpm install
 
-# 3. Compile o @sythm/core e inicie backend + frontend juntos
+# 3. Suba o Postgres local e configure o backend
+docker compose up -d db
+cp apps/backend/.env.example apps/backend/.env   # ajuste DATABASE_URL se usar outro Postgres
+
+# 4. Compile o @sythm/core e inicie backend + frontend juntos
+#    (as migrations do banco são aplicadas automaticamente no start do backend)
 pnpm dev
 ```
 
@@ -161,9 +168,12 @@ Após subir o ambiente:
 | `pnpm dev:frontend` | `@sythm/frontend` | Sobe apenas a IDE Vite na porta `5173` |
 | `pnpm build:core` | `@sythm/core` | Compila a biblioteca compiladora em `packages/core/dist` |
 | `pnpm build` | Monorepo | Compila core, backend e gera o bundle de produção do frontend |
-| `pnpm test` | `@sythm/core` | Executa a suíte de testes unitários com Vitest |
+| `pnpm test` | Monorepo | Executa os testes do `@sythm/core` e do `@sythm/backend` (Vitest). Defina `TEST_DATABASE_URL` para incluir os testes de integração com Postgres |
+| `pnpm lint` | Monorepo | ESLint em todo o monorepo |
 | `pnpm typecheck` | Monorepo | Roda `tsc --noEmit` em todos os pacotes |
-| `pnpm check` | Monorepo | Executa `typecheck` + `test` + `build` em sequência |
+| `pnpm check` | Monorepo | Executa `lint` + `typecheck` + `test` + `build` em sequência |
+| `pnpm --filter @sythm/backend migrate` | `@sythm/backend` | Aplica as migrations pendentes manualmente |
+| `pnpm --filter @sythm/backend import:json <arquivo>` | `@sythm/backend` | Importa o antigo `data/sythm-db.json` para o Postgres |
 
 ---
 
@@ -181,6 +191,7 @@ Após subir o ambiente:
 | **Cifras & Arpejo** | `PLAY CHORDS Cmaj7 Am7 FOR 2 BEATS.` / `ARPEGGIATE Cmaj7 UP-DOWN FOR 0.25 BEATS.` | Interpreta cifras ou gera arpejos automáticos |
 | **Bateria & Euclid** | `PLAY DRUMS KICK HIHAT SNARE HIHAT FOR 0.5 BEATS.` / `PLAY EUCLIDEAN KICK 4 IN 16 FOR 0.25 BEATS.` | Percussão sintetizada e padrões euclidianos |
 | **Efeitos** | `FILTER IS LOWPASS CUTOFF HZ Q 2.5.` / `REVERB IS 35 PERCENT.` | Filtro Biquad, `SWEEP`, `LFO`, `ENVELOPE`, `DELAY`, `REVERB`, `DETUNE`, `PAN` |
+| **Importar arquivo** | `COPY "bateria.sythm".` | Inclui outro arquivo do projeto neste ponto (bibliotecas de bateria, controles, presets). Veja [docs/copy.md](./docs/copy.md) |
 | **Sub-rotinas & Loops** | `SECTION DROP. ... END-SECTION.` / `PERFORM DROP 4 TIMES.` | Reutiliza blocos musicais ou repete com `REPEAT N TIMES` |
 | **Sampler Externo** | `PLAY SAMPLE "demo-rave-loop.wav" RATE 1.15 OFFSET 0 SEC FOR 16 BEATS.` | Reproduz `.mp3`/`.wav` carregado com controle de velocidade/pitch e offset |
 
@@ -281,6 +292,10 @@ O serviço HTTP em `apps/backend` roda por padrão em `http://localhost:3001` (c
 | `GET` | `/api/health` | Retorna `{ status: "ok", service: "sythm-backend", timestamp }` |
 | `GET` | `/api/presets` | Lista os presets embutidos de `DEFAULT_PRESETS` |
 | `POST` | `/api/compile` | Compila código `.sythm` enviado em `{ "code": "..." }` retornando AST resumida, `ExecutionPlan`, `diagnostics` e `durationMs` |
+
+Rotas de conta e nuvem (exigem `Authorization: Bearer <token>`, exceto register/login): `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/refresh`, `POST /api/auth/logout-all`, `GET|PUT /api/workspace`, `GET|POST /api/friends`, `DELETE /api/friends/:friendId`, `POST /api/friends/share`, `GET /api/friends/shared`.
+
+Configuração, limites, rate limiting e segurança: veja [docs/backend.md](./docs/backend.md).
 
 Exemplo rápido via `curl`:
 

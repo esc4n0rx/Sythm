@@ -22,12 +22,23 @@
     "dev:frontend": "pnpm --filter @sythm/frontend dev",
     "dev": "pnpm --filter @sythm/core build && pnpm --parallel --filter \"@sythm/*\" dev",
     "build": "pnpm --filter @sythm/core build && pnpm --filter @sythm/backend build && pnpm --filter @sythm/frontend build",
-    "test": "pnpm --filter @sythm/core test",
+    "test": "pnpm --filter @sythm/core test && pnpm --filter @sythm/backend test && pnpm --filter @sythm/frontend test",
     "typecheck": "pnpm -r typecheck",
-    "check": "pnpm -r typecheck && pnpm test && pnpm build"
+    "check": "pnpm lint && pnpm -r typecheck && pnpm test && pnpm build",
+    "lint": "eslint .",
+    "format": "prettier --write ."
   },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
+    "typescript-eslint": "^8.72.2"
   }
 }
